@@ -1,8 +1,11 @@
-//! egui dashboard: five tabs over one `dispatch`, zero JavaScript.
+//! egui dashboard: sidebar navigation + per-device pages, zero JavaScript.
 //!
-//! Every button maps to a `Command` variant; async results arrive over mpsc
-//! and the UI repaints while jobs are pending. Snapshots decode to RGB on
-//! the worker and become GPU textures on the UI thread.
+//! Layout mirrors the original webapp: retractable left sidebar (Dashboard,
+//! Energy, Lighting, Climate, Cameras, Weather, Alarms, Raw), main area shows
+//! the selected page, per-device detail pages for Hue lights and Ring
+//! doorbells. High-contrast visuals + 16px base font (the default theme was
+//! legitimately hard to read). Field values persist to
+//! %LOCALAPPDATA%/rust-devices-mcp/ui.json — passwords never persist.
 use devices_core::{
     camera::{self, CamSource},
     creds::{Credentials, Vendor},
@@ -15,23 +18,33 @@ use std::future::Future;
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
-#[derive(PartialEq, Clone, Copy)]
-enum Tab {
-    Plugs,
-    Hue,
-    Weather,
+#[derive(PartialEq, Clone)]
+enum Page {
+    Dashboard,
+    Energy,
+    Lighting,
+    LightDetail(String),
+    Climate,
     Cameras,
-    Ring,
+    Weather,
+    Alarms,
+    DoorbellDetail(i64),
+    Raw,
 }
 
-impl Tab {
-    fn label(&self) -> &'static str {
+impl Page {
+    fn label(&self) -> String {
         match self {
-            Self::Plugs => "Plugs",
-            Self::Hue => "Hue",
-            Self::Weather => "Weather",
-            Self::Cameras => "Cameras",
-            Self::Ring => "Ring",
+            Self::Dashboard => "Dashboard".to_string(),
+            Self::Energy => "Energy".to_string(),
+            Self::Lighting => "Lighting".to_string(),
+            Self::LightDetail(id) => format!("Light {id}"),
+            Self::Climate => "Climate".to_string(),
+            Self::Cameras => "Cameras".to_string(),
+            Self::Weather => "Weather".to_string(),
+            Self::Alarms => "Alarms".to_string(),
+            Self::DoorbellDetail(id) => format!("Doorbell {id}"),
+            Self::Raw => "Raw JSON".to_string(),
         }
     }
 }
@@ -56,31 +69,36 @@ struct Shot {
     texture: Option<egui::TextureHandle>,
 }
 
+const VENDORS: &[&str] = &["tapo", "kasa", "shelly", "demo"];
+const SOURCES: &[&str] = &["usb", "url", "ring", "tapo", "onvif", "demo"];
+const MODES: &[&str] = &["disarmed", "home", "away"];
+
 pub struct DevicesApp {
     rt: Arc<tokio::runtime::Runtime>,
     tx: mpsc::Sender<Job>,
     rx: mpsc::Receiver<Job>,
     pending: usize,
-    tab: Tab,
+    page: Page,
+    sidebar_open: bool,
     status_line: String,
     raw: String,
-    // Plugs tab.
+    // Plugs.
     plug_vendor: String,
     plug_ip: String,
     plug_user: String,
     plug_pass: String,
     plug_cards: Vec<Value>,
-    // Hue tab.
+    // Hue.
     hue_ip: String,
     hue_user: String,
     lights: Vec<Value>,
     bri_pending: HashMap<String, u8>,
     bri_sent_at: HashMap<String, Instant>,
-    // Weather tab.
+    // Weather.
     wx_lat: String,
     wx_lon: String,
     wx_card: Option<Value>,
-    // Cameras tab.
+    // Cameras.
     cam_source: String,
     cam_ip: String,
     cam_model: String,
@@ -90,28 +108,76 @@ pub struct DevicesApp {
     cam_url: String,
     cam_token: String,
     shots: Vec<Shot>,
-    // Ring tab.
+    // Ring.
     ring_email: String,
     ring_pass: String,
     ring_token: String,
     ring_id: String,
-    ring_cards: Vec<Value>,
+    ring_locations: Vec<Value>,
+    ring_doorbells: Vec<Value>,
+    alarm_mode: String,
+    alarm_location: String,
 }
 
 fn env_or(key: &str) -> String {
     std::env::var(key).unwrap_or_default()
 }
 
+fn persist_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var("LOCALAPPDATA").ok()?;
+    Some(std::path::PathBuf::from(base).join("rust-devices-mcp"))
+}
+
+/// Near-white on near-black (slate-950 family, like the original webapp),
+/// 16px base font. The stock dark theme was legitimately hard to read.
+fn harsh_visuals() -> egui::Visuals {
+    let mut visuals = egui::Visuals::dark();
+    visuals.override_text_color = Some(egui::Color32::from_rgb(242, 246, 252));
+    visuals.window_fill = egui::Color32::from_rgb(2, 6, 18);
+    visuals.panel_fill = egui::Color32::from_rgb(10, 18, 34);
+    visuals.extreme_bg_color = egui::Color32::from_rgb(2, 6, 18);
+    visuals.code_bg_color = egui::Color32::from_rgb(4, 10, 24);
+    visuals.faint_bg_color = egui::Color32::from_rgb(16, 28, 50);
+    visuals.warn_fg_color = egui::Color32::from_rgb(255, 200, 120);
+    visuals.error_fg_color = egui::Color32::from_rgb(255, 130, 130);
+    visuals.widgets.noninteractive.fg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(200, 212, 230));
+    visuals.widgets.inactive.fg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(235, 242, 252));
+    visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
+    visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
+    visuals.selection.bg_fill = egui::Color32::from_rgb(36, 64, 107);
+    visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    visuals
+}
+
 impl DevicesApp {
     pub fn new(ctx: &eframe::CreationContext<'_>, rt: Arc<tokio::runtime::Runtime>) -> Self {
-        ctx.egui_ctx.set_visuals(egui::Visuals::dark());
+        ctx.egui_ctx.set_visuals(harsh_visuals());
+        ctx.egui_ctx.style_mut_of(egui::Theme::Dark, |style| {
+            use egui::TextStyle::*;
+            for (text_style, size) in [
+                (Body, 16.0),
+                (Button, 16.0),
+                (Heading, 23.0),
+                (Monospace, 14.0),
+                (Small, 13.0),
+            ] {
+                if let Some(font) = style.text_styles.get_mut(&text_style) {
+                    font.size = size;
+                }
+            }
+            style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+            style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        });
         let (tx, rx) = mpsc::channel();
         let mut app = Self {
             rt,
             tx,
             rx,
             pending: 0,
-            tab: Tab::Plugs,
+            page: Page::Dashboard,
+            sidebar_open: true,
             status_line: "starting…".to_string(),
             raw: String::new(),
             plug_vendor: "tapo".to_string(),
@@ -140,13 +206,89 @@ impl DevicesApp {
             ring_pass: String::new(),
             ring_token: env_or("RING_TOKEN_FILE"),
             ring_id: String::new(),
-            ring_cards: Vec::new(),
+            ring_locations: Vec::new(),
+            ring_doorbells: Vec::new(),
+            alarm_mode: "disarmed".to_string(),
+            alarm_location: String::new(),
         };
-        app.spawn(|| async { Job::Status(dispatch(Command::Status).await) });
-        app.spawn_weather(None, None);
+        app.load_fields();
+        // Dashboard paints real data immediately: no creds needed anywhere here.
+        app.spawn_status();
+        app.spawn_weather_boot();
+        if !app.hue_ip.trim().is_empty() && !app.hue_user.trim().is_empty() {
+            app.spawn_hue_lights();
+        }
+        if !app.ring_token.trim().is_empty() {
+            app.spawn_ring(false);
+            app.spawn_ring(true);
+        }
         app
     }
 
+    // ----- field persistence (never passwords) -----
+    fn fields_json(&self) -> Value {
+        serde_json::json!({
+            "plug_vendor": self.plug_vendor, "plug_ip": self.plug_ip,
+            "hue_ip": self.hue_ip, "hue_user": self.hue_user,
+            "wx_lat": self.wx_lat, "wx_lon": self.wx_lon,
+            "cam_source": self.cam_source, "cam_ip": self.cam_ip,
+            "cam_model": self.cam_model, "cam_index": self.cam_index,
+            "cam_url": self.cam_url, "cam_token": self.cam_token,
+            "ring_token": self.ring_token, "ring_id": self.ring_id,
+            "alarm_location": self.alarm_location,
+        })
+    }
+
+    fn save_fields(&self) {
+        if let Some(dir) = persist_path() {
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join("ui.json");
+            if let Ok(text) = serde_json::to_string_pretty(&self.fields_json()) {
+                let _ = std::fs::write(path, text);
+            }
+        }
+    }
+
+    fn load_fields(&mut self) {
+        let text = persist_path().and_then(|dir| std::fs::read_to_string(dir.join("ui.json")).ok());
+        let Some(text) = text else { return };
+        let json: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let get = |key: &str| {
+            json.get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let filled = |key: &str, slot: &mut String| {
+            let value = get(key);
+            if !value.is_empty() && slot.trim().is_empty() {
+                *slot = value;
+            }
+        };
+        filled("plug_vendor", &mut self.plug_vendor);
+        if VENDORS.iter().all(|v| *v != self.plug_vendor.as_str()) {
+            self.plug_vendor = "tapo".to_string();
+        }
+        filled("plug_ip", &mut self.plug_ip);
+        filled("hue_ip", &mut self.hue_ip);
+        filled("hue_user", &mut self.hue_user);
+        filled("wx_lat", &mut self.wx_lat);
+        filled("wx_lon", &mut self.wx_lon);
+        filled("cam_source", &mut self.cam_source);
+        if SOURCES.iter().all(|s| *s != self.cam_source.as_str()) {
+            self.cam_source = "usb".to_string();
+        }
+        filled("cam_ip", &mut self.cam_ip);
+        filled("cam_model", &mut self.cam_model);
+        filled("cam_index", &mut self.cam_index);
+        filled("cam_url", &mut self.cam_url);
+        filled("cam_token", &mut self.cam_token);
+        filled("ring_token", &mut self.ring_token);
+        filled("ring_id", &mut self.ring_id);
+        filled("alarm_location", &mut self.alarm_location);
+    }
+
+    // ----- job plumbing -----
     fn spawn<F>(&mut self, make: impl FnOnce() -> F + Send + 'static)
     where
         F: Future<Output = Job> + Send + 'static,
@@ -156,6 +298,7 @@ impl DevicesApp {
             let _ = tx.send(make().await);
         });
         self.pending += 1;
+        self.save_fields();
     }
 
     fn note(&mut self, line: impl Into<String>) {
@@ -186,12 +329,26 @@ impl DevicesApp {
                     self.show_raw(&value);
                     if let Some(list) = value.as_array() {
                         self.lights = list.clone();
+                        self.note(format!("{} Hue lights", list.len()));
                     } else {
-                        self.lights = vec![value];
+                        self.lights = vec![value.clone()];
+                        self.note("Hue bridge answered with an error — see Raw JSON");
                     }
                 }
                 Job::HueSet(value) => {
                     self.show_raw(&value);
+                    // Refresh the list so the page shows hardware truth.
+                    let (ip, user) = (Self::opt(&self.hue_ip), Self::opt(&self.hue_user));
+                    self.pending += 1;
+                    let tx = self.tx.clone();
+                    self.rt.spawn(async move {
+                        let result = dispatch(Command::HueLights {
+                            bridge_ip: ip,
+                            username: user,
+                        })
+                        .await;
+                        let _ = tx.send(Job::HueLights(result));
+                    });
                 }
                 Job::Weather(value) => {
                     self.show_raw(&value);
@@ -219,9 +376,13 @@ impl DevicesApp {
                 }
                 Job::Ring(value) => {
                     self.show_raw(&value);
-                    self.ring_cards.push(value);
-                    if self.ring_cards.len() > 6 {
-                        self.ring_cards.remove(0);
+                    if let Some(list) = value.get("doorbells").and_then(|v| v.as_array()) {
+                        self.ring_doorbells = list.clone();
+                    }
+                    if value.get("location_id").is_some() {
+                        self.ring_locations = vec![value.clone()];
+                    } else if value.as_array().is_some() {
+                        self.ring_locations = value.as_array().cloned().unwrap_or_default();
                     }
                 }
             }
@@ -255,10 +416,13 @@ impl DevicesApp {
         Ok((vendor, creds))
     }
 
+    fn spawn_status(&mut self) {
+        self.spawn(|| async { Job::Status(dispatch(Command::Status).await) });
+    }
+
     fn spawn_plug(&mut self, state: Option<bool>) {
-        let parsed = self.plug_creds();
         let ip = self.plug_ip.trim().to_string();
-        match (parsed, state) {
+        match (self.plug_creds(), state) {
             (Ok((vendor, creds)), None) => {
                 self.note(format!("querying {} plug @ {ip}…", vendor.as_str()));
                 self.spawn(move || async move {
@@ -323,13 +487,13 @@ impl DevicesApp {
         });
     }
 
-    fn spawn_weather(&mut self, lat: Option<f64>, lon: Option<f64>) {
+    fn spawn_weather_boot(&mut self) {
         self.note("fetching weather…");
-        self.spawn(move || async move {
+        self.spawn(|| async {
             Job::Weather(
                 dispatch(Command::Weather {
-                    latitude: lat,
-                    longitude: lon,
+                    latitude: None,
+                    longitude: None,
                 })
                 .await,
             )
@@ -368,7 +532,7 @@ impl DevicesApp {
             .await
             {
                 Ok(frame) => {
-                    let meta = serde_json::to_value(&frame.meta).unwrap_or(serde_json::Value::Null);
+                    let meta = serde_json::to_value(&frame.meta).unwrap_or(Value::Null);
                     Job::Snapshot {
                         label,
                         meta,
@@ -414,6 +578,50 @@ impl DevicesApp {
             Job::Ring(value)
         });
     }
+
+    fn spawn_alarm_read(&mut self) {
+        let (email, pass, token) = (
+            Self::opt(&self.ring_email),
+            Self::opt(&self.ring_pass),
+            Self::opt(&self.ring_token),
+        );
+        self.note("reading alarm state…");
+        self.spawn(move || async move {
+            Job::Ring(
+                dispatch(Command::RingAlarm {
+                    mode: None,
+                    location_id: None,
+                    email,
+                    password: pass,
+                    token_file: token,
+                })
+                .await,
+            )
+        });
+    }
+
+    fn spawn_alarm_set(&mut self) {
+        let mode = self.alarm_mode.clone();
+        let location = Self::opt(&self.alarm_location);
+        let (email, pass, token) = (
+            Self::opt(&self.ring_email),
+            Self::opt(&self.ring_pass),
+            Self::opt(&self.ring_token),
+        );
+        self.note(format!("setting alarm mode {mode}…"));
+        self.spawn(move || async move {
+            Job::Ring(
+                dispatch(Command::RingAlarm {
+                    mode: Some(mode),
+                    location_id: location,
+                    email,
+                    password: pass,
+                    token_file: token,
+                })
+                .await,
+            )
+        });
+    }
 }
 
 fn field(ui: &mut egui::Ui, label: &str, text: &mut String, password: bool, hint: &str) {
@@ -423,14 +631,27 @@ fn field(ui: &mut egui::Ui, label: &str, text: &mut String, password: bool, hint
             egui::TextEdit::singleline(text)
                 .password(password)
                 .hint_text(hint)
-                .desired_width(170.0),
+                .desired_width(220.0),
         );
+    });
+}
+
+fn combo(ui: &mut egui::Ui, label: &str, current: &mut String, options: &[&str]) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt(label)
+            .selected_text(current.as_str())
+            .show_ui(ui, |ui| {
+                for option in options {
+                    ui.selectable_value(current, (*option).to_string(), *option);
+                }
+            });
     });
 }
 
 fn value_rows(ui: &mut egui::Ui, value: &Value) {
     if let Some(err) = value.get("error").and_then(|e| e.as_str()) {
-        ui.colored_label(egui::Color32::LIGHT_RED, err);
+        ui.colored_label(egui::Color32::from_rgb(255, 140, 140), err);
         return;
     }
     if let Some(map) = value.as_object() {
@@ -439,7 +660,7 @@ fn value_rows(ui: &mut egui::Ui, value: &Value) {
             .striped(true)
             .show(ui, |ui| {
                 for (key, val) in map {
-                    ui.label(key);
+                    ui.strong(key);
                     let text = match val {
                         Value::String(s) => s.clone(),
                         Value::Null => "—".to_string(),
@@ -454,17 +675,27 @@ fn value_rows(ui: &mut egui::Ui, value: &Value) {
     }
 }
 
+fn on_pill(ui: &mut egui::Ui, on: bool) {
+    let (text, color) = if on {
+        ("● ON", egui::Color32::from_rgb(110, 255, 150))
+    } else {
+        ("○ OFF", egui::Color32::from_rgb(255, 150, 150))
+    };
+    ui.colored_label(color, egui::RichText::new(text).strong());
+}
+
 impl eframe::App for DevicesApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.drain(&ctx);
 
-        egui::Panel::top("tabs").show(ui, |ui| {
+        egui::Panel::top("topbar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("Devices (Rust)");
-                for tab in [Tab::Plugs, Tab::Hue, Tab::Weather, Tab::Cameras, Tab::Ring] {
-                    ui.selectable_value(&mut self.tab, tab, tab.label());
+                let glyph = if self.sidebar_open { "⏷" } else { "⏵" };
+                if ui.button(format!("{glyph} Menu")).clicked() {
+                    self.sidebar_open = !self.sidebar_open;
                 }
+                ui.heading("Devices (Rust)");
                 if self.pending > 0 {
                     ui.spinner();
                     ui.label(format!("{} jobs", self.pending));
@@ -478,33 +709,132 @@ impl eframe::App for DevicesApp {
             });
         });
 
-        egui::CentralPanel::default().show(ui, |ui| match self.tab {
-            Tab::Plugs => self.tab_plugs(ui),
-            Tab::Hue => self.tab_hue(ui),
-            Tab::Weather => self.tab_weather(ui),
-            Tab::Cameras => self.tab_cameras(ui),
-            Tab::Ring => self.tab_ring(ui),
-        });
-
-        egui::Panel::right("raw").resizable(true).show(ui, |ui| {
-            ui.heading("Raw JSON");
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.monospace(&self.raw);
+        if self.sidebar_open {
+            egui::Panel::left("sidebar").resizable(true).show(ui, |ui| {
+                ui.heading("Navigate");
+                self.nav_button(ui, Page::Dashboard);
+                self.nav_button(ui, Page::Energy);
+                ui.collapsing("Lighting", |ui| {
+                    self.nav_button(ui, Page::Lighting);
+                    for lamp in self.lights.clone() {
+                        let id = lamp
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?")
+                            .to_string();
+                        let name = lamp
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("?")
+                            .to_string();
+                        if ui
+                            .selectable_label(
+                                self.page == Page::LightDetail(id.clone()),
+                                format!("💡 {name}"),
+                            )
+                            .clicked()
+                        {
+                            self.page = Page::LightDetail(id);
+                        }
+                    }
+                });
+                self.nav_button(ui, Page::Climate);
+                self.nav_button(ui, Page::Cameras);
+                self.nav_button(ui, Page::Weather);
+                ui.collapsing("Alarms", |ui| {
+                    self.nav_button(ui, Page::Alarms);
+                    for bell in self.ring_doorbells.clone() {
+                        let id = bell.get("id").and_then(|v| v.as_i64()).unwrap_or(-1);
+                        let name = bell
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("doorbell")
+                            .to_string();
+                        if id >= 0
+                            && ui
+                                .selectable_label(
+                                    self.page == Page::DoorbellDetail(id),
+                                    format!("🔔 {name}"),
+                                )
+                                .clicked()
+                        {
+                            self.page = Page::DoorbellDetail(id);
+                            self.ring_id = id.to_string();
+                        }
+                    }
+                });
+                self.nav_button(ui, Page::Raw);
             });
+        }
+
+        egui::CentralPanel::default().show(ui, |ui| match self.page.clone() {
+            Page::Dashboard => self.page_dashboard(ui),
+            Page::Energy => self.page_energy(ui),
+            Page::Lighting => self.page_lighting(ui),
+            Page::LightDetail(id) => self.page_light_detail(ui, &id),
+            Page::Climate => self.page_climate(ui),
+            Page::Cameras => self.page_cameras(ui),
+            Page::Weather => self.page_weather(ui),
+            Page::Alarms => self.page_alarms(ui),
+            Page::DoorbellDetail(id) => self.page_doorbell_detail(ui, id),
+            Page::Raw => {
+                ui.heading("Raw JSON");
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.monospace(&self.raw);
+                });
+            }
         });
     }
 }
 
 impl DevicesApp {
-    fn tab_plugs(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Smart plugs");
-        field(
-            ui,
-            "Vendor",
-            &mut self.plug_vendor,
-            false,
-            "tapo|kasa|shelly|demo",
-        );
+    fn nav_button(&mut self, ui: &mut egui::Ui, page: Page) {
+        if ui
+            .selectable_label(self.page == page, page.label())
+            .clicked()
+        {
+            self.page = page;
+        }
+    }
+
+    fn page_dashboard(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Dashboard");
+        ui.label("Every button below calls the same command bus as the CLI and MCP server.");
+        ui.horizontal(|ui| {
+            if ui.button("⟳ Plugs").clicked() {
+                self.page = Page::Energy;
+            }
+            if ui.button("⟳ Lighting").clicked() {
+                self.page = Page::Lighting;
+            }
+            if ui.button("⟳ Cameras").clicked() {
+                self.page = Page::Cameras;
+            }
+            if ui.button("⟳ Alarms").clicked() {
+                self.page = Page::Alarms;
+            }
+        });
+        ui.separator();
+        if let Some(card) = self.wx_card.clone() {
+            ui.group(|ui| {
+                ui.heading("Weather now");
+                value_rows(ui, &card);
+            });
+        }
+        ui.group(|ui| {
+            ui.heading("Fleet at a glance");
+            ui.label(format!("Hue lights seen: {}", self.lights.len()));
+            ui.label(format!(
+                "Ring doorbells seen: {}",
+                self.ring_doorbells.len()
+            ));
+            ui.label(format!("Snapshots this session: {}", self.shots.len()));
+        });
+    }
+
+    fn page_energy(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Energy — smart plugs");
+        combo(ui, "Vendor", &mut self.plug_vendor, VENDORS);
         field(ui, "Device IP", &mut self.plug_ip, false, "192.168.0.17");
         field(ui, "Username", &mut self.plug_user, false, "env fallback");
         field(ui, "Password", &mut self.plug_pass, true, "env fallback");
@@ -515,94 +845,162 @@ impl DevicesApp {
             if ui.button("Turn ON").clicked() {
                 self.spawn_plug(Some(true));
             }
-            let off = egui::Button::new("Turn OFF").fill(egui::Color32::DARK_RED);
-            if ui.add(off).clicked() {
+            if ui
+                .add(egui::Button::new("Turn OFF").fill(egui::Color32::from_rgb(122, 45, 45)))
+                .clicked()
+            {
                 self.spawn_plug(Some(false));
             }
         });
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for card in self.plug_cards.clone() {
-                ui.group(|ui| value_rows(ui, &card));
+                ui.group(|ui| {
+                    if let (Some(ip), Some(vendor)) = (
+                        card.get("device_ip").and_then(|v| v.as_str()),
+                        card.get("vendor").and_then(|v| v.as_str()),
+                    ) {
+                        ui.heading(format!("{vendor} plug @ {ip}"));
+                    }
+                    value_rows(ui, &card);
+                });
             }
         });
     }
 
-    fn tab_hue(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Hue lighting");
+    fn page_lighting(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Lighting — Hue");
         field(ui, "Bridge IP", &mut self.hue_ip, false, "192.168.0.236");
         field(ui, "Username", &mut self.hue_user, false, "HUE_USERNAME");
-        if ui.button("List lights").clicked() {
-            self.spawn_hue_lights();
-        }
+        ui.horizontal(|ui| {
+            if ui.button("List lights").clicked() {
+                self.spawn_hue_lights();
+            }
+        });
         ui.separator();
         let lights = self.lights.clone();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for lamp in &lights {
                 let id = lamp.get("id").and_then(|v| v.as_str()).unwrap_or("?");
                 let name = lamp.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                let on = lamp.get("on").and_then(|v| v.as_bool()).unwrap_or(false);
-                let bri = lamp.get("bri").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
                 ui.group(|ui| {
                     ui.horizontal(|ui| {
-                        ui.heading(name);
-                        let pill = if on { "ON" } else { "OFF" };
-                        ui.label(pill);
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button("On").clicked() {
-                            self.spawn_hue_set(id.to_string(), true, None);
+                        if ui.link(name).clicked() {
+                            self.page = Page::LightDetail(id.to_string());
                         }
-                        if ui.button("Off").clicked() {
-                            self.spawn_hue_set(id.to_string(), false, None);
-                        }
-                        let pending_bri = *self.bri_pending.entry(id.to_string()).or_insert(bri);
-                        let mut slider_value = pending_bri;
-                        let slider =
-                            ui.add(egui::Slider::new(&mut slider_value, 1..=254).text("bri"));
-                        self.bri_pending.insert(id.to_string(), slider_value);
-                        if slider.drag_stopped() {
-                            let now = Instant::now();
-                            let id_string = id.to_string();
-                            let last = self.bri_sent_at.get(&id_string);
-                            if last
-                                .map(|t| now.duration_since(*t).as_secs() >= 1)
-                                .unwrap_or(true)
-                            {
-                                self.bri_sent_at.insert(id_string, now);
-                                self.spawn_hue_set(id.to_string(), true, Some(slider_value));
-                            }
+                        if let Some(on) = lamp.get("on").and_then(|v| v.as_bool()) {
+                            on_pill(ui, on);
                         }
                     });
+                    self.light_controls(ui, id);
                 });
             }
         });
     }
 
-    fn tab_weather(&mut self, ui: &mut egui::Ui) {
+    fn light_controls(&mut self, ui: &mut egui::Ui, id: &str) {
+        let bri = self
+            .lights
+            .iter()
+            .find(|lamp| lamp.get("id").and_then(|v| v.as_str()) == Some(id))
+            .and_then(|lamp| lamp.get("bri"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u8;
+        ui.horizontal(|ui| {
+            if ui.button("On").clicked() {
+                self.spawn_hue_set(id.to_string(), true, None);
+            }
+            if ui.button("Off").clicked() {
+                self.spawn_hue_set(id.to_string(), false, None);
+            }
+            let pending_bri = *self.bri_pending.entry(id.to_string()).or_insert(bri);
+            let mut slider_value = pending_bri;
+            let slider = ui.add(egui::Slider::new(&mut slider_value, 1..=254).text("brightness"));
+            self.bri_pending.insert(id.to_string(), slider_value);
+            if slider.drag_stopped() {
+                let now = Instant::now();
+                let id_string = id.to_string();
+                let last = self.bri_sent_at.get(&id_string);
+                if last
+                    .map(|t| now.duration_since(*t).as_secs() >= 1)
+                    .unwrap_or(true)
+                {
+                    self.bri_sent_at.insert(id_string, now);
+                    self.spawn_hue_set(id.to_string(), true, Some(slider_value));
+                }
+            }
+        });
+    }
+
+    fn page_light_detail(&mut self, ui: &mut egui::Ui, id: &str) {
+        let lamp = self
+            .lights
+            .iter()
+            .find(|lamp| lamp.get("id").and_then(|v| v.as_str()) == Some(id))
+            .cloned();
+        match lamp {
+            Some(lamp) => {
+                let name = lamp.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                ui.heading(format!("💡 {name}"));
+                ui.group(|ui| value_rows(ui, &lamp));
+                ui.separator();
+                self.light_controls(ui, id);
+            }
+            None => {
+                ui.heading(format!("Light {id}"));
+                ui.label("Not in the last listing — hit List lights on the Lighting page.");
+                if ui.button("List lights now").clicked() {
+                    self.spawn_hue_lights();
+                    self.page = Page::Lighting;
+                }
+            }
+        }
+    }
+
+    fn page_climate(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Climate");
+        ui.group(|ui| {
+            ui.label("Not ported yet. Midea / Mitsubishi drivers live in the Python app;");
+            ui.label("this page lands with the climate tier (one Command variant each).");
+        });
+    }
+
+    fn page_weather(&mut self, ui: &mut egui::Ui) {
         ui.heading("Weather (Open-Meteo, keyless — Vienna default)");
         field(ui, "Lat", &mut self.wx_lat, false, "48.2082");
         field(ui, "Lon", &mut self.wx_lon, false, "16.3738");
         if ui.button("Refresh").clicked() {
             let lat = self.wx_lat.trim().parse().ok();
             let lon = self.wx_lon.trim().parse().ok();
-            self.spawn_weather(lat, lon);
+            self.spawn_weather_latlon(lat, lon);
         }
         ui.separator();
         if let Some(card) = self.wx_card.clone() {
-            ui.group(|ui| value_rows(ui, &card));
+            ui.group(|ui| {
+                if let Some(summary) = card.get("summary").and_then(|v| v.as_str()) {
+                    ui.heading(summary);
+                }
+                value_rows(ui, &card);
+            });
         }
     }
 
-    fn tab_cameras(&mut self, ui: &mut egui::Ui) {
+    fn spawn_weather_latlon(&mut self, lat: Option<f64>, lon: Option<f64>) {
+        self.note("fetching weather…");
+        self.spawn(move || async move {
+            Job::Weather(
+                dispatch(Command::Weather {
+                    latitude: lat,
+                    longitude: lon,
+                })
+                .await,
+            )
+        });
+    }
+
+    fn page_cameras(&mut self, ui: &mut egui::Ui) {
         ui.heading("Camera snapshots (real frames)");
-        field(
-            ui,
-            "Source",
-            &mut self.cam_source,
-            false,
-            "usb|url|ring|tapo|onvif|demo",
-        );
+        combo(ui, "Source", &mut self.cam_source, SOURCES);
         field(ui, "Device IP / doorbell id", &mut self.cam_ip, false, "");
         field(ui, "URL", &mut self.cam_url, false, "https://…jpg");
         field(ui, "Model", &mut self.cam_model, false, "tapo: c220…");
@@ -619,7 +1017,6 @@ impl DevicesApp {
                 }
             };
             let device_index = self.cam_index.trim().parse().ok();
-            let onvif_port: Option<u16> = None;
             let label = format!("{} {}", source.as_str(), self.cam_ip.trim());
             self.spawn_snapshot(
                 label,
@@ -628,7 +1025,7 @@ impl DevicesApp {
                 Self::opt(&self.cam_model),
                 Self::opt(&self.cam_user),
                 Self::opt(&self.cam_pass),
-                onvif_port,
+                None,
                 device_index,
                 Self::opt(&self.cam_url),
                 Self::opt(&self.cam_token),
@@ -648,8 +1045,8 @@ impl DevicesApp {
         });
     }
 
-    fn tab_ring(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Ring");
+    fn page_alarms(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Alarms — Ring");
         field(ui, "Email", &mut self.ring_email, false, "");
         field(ui, "Password", &mut self.ring_pass, true, "");
         field(
@@ -667,35 +1064,98 @@ impl DevicesApp {
             if ui.button("Doorbells").clicked() {
                 self.spawn_ring(true);
             }
-            if ui.button("Doorbell snapshot").clicked() {
-                let id = self.ring_id.trim().to_string();
-                let label = format!("ring {id}");
-                let (email, pass, token) = (
-                    Self::opt(&self.ring_email),
-                    Self::opt(&self.ring_pass),
-                    Self::opt(&self.ring_token),
-                );
-                self.spawn_snapshot(
-                    label,
-                    CamSource::Ring,
-                    id,
-                    None,
-                    email,
-                    pass,
-                    None,
-                    None,
-                    None,
-                    token,
-                );
-                self.tab = Tab::Cameras;
+            if ui.button("Read alarm state").clicked() {
+                self.spawn_alarm_read();
             }
         });
         ui.separator();
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for card in self.ring_cards.clone() {
-                ui.group(|ui| value_rows(ui, &card));
+        ui.horizontal(|ui| {
+            combo(ui, "Mode", &mut self.alarm_mode, MODES);
+            field(
+                ui,
+                "Location id",
+                &mut self.alarm_location,
+                false,
+                "from alarm state",
+            );
+            if ui.button("Apply mode").clicked() {
+                self.spawn_alarm_set();
             }
         });
+        ui.separator();
+        if ui.button("Doorbell snapshot → Cameras").clicked() {
+            let id = self.ring_id.trim().to_string();
+            let label = format!("ring {id}");
+            let (email, pass, token) = (
+                Self::opt(&self.ring_email),
+                Self::opt(&self.ring_pass),
+                Self::opt(&self.ring_token),
+            );
+            self.spawn_snapshot(
+                label,
+                CamSource::Ring,
+                id,
+                None,
+                email,
+                pass,
+                None,
+                None,
+                None,
+                token,
+            );
+            self.page = Page::Cameras;
+        }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for location in self.ring_locations.clone() {
+                ui.group(|ui| {
+                    ui.heading("Alarm location");
+                    value_rows(ui, &location);
+                });
+            }
+        });
+    }
+
+    fn page_doorbell_detail(&mut self, ui: &mut egui::Ui, id: i64) {
+        let bell = self
+            .ring_doorbells
+            .iter()
+            .find(|bell| bell.get("id").and_then(|v| v.as_i64()) == Some(id))
+            .cloned();
+        match bell {
+            Some(bell) => {
+                let name = bell
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("doorbell");
+                ui.heading(format!("🔔 {name} (id {id})"));
+                ui.group(|ui| value_rows(ui, &bell));
+                ui.separator();
+                if ui.button("Snapshot now").clicked() {
+                    let (email, pass, token) = (
+                        Self::opt(&self.ring_email),
+                        Self::opt(&self.ring_pass),
+                        Self::opt(&self.ring_token),
+                    );
+                    self.spawn_snapshot(
+                        format!("ring {id}"),
+                        CamSource::Ring,
+                        id.to_string(),
+                        None,
+                        email,
+                        pass,
+                        None,
+                        None,
+                        None,
+                        token,
+                    );
+                    self.page = Page::Cameras;
+                }
+            }
+            None => {
+                ui.heading(format!("Doorbell {id}"));
+                ui.label("Not in the last listing — hit Doorbells on the Alarms page.");
+            }
+        }
     }
 }
 
