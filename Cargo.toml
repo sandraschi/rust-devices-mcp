@@ -25,6 +25,8 @@ oxvif = "0.17"
 nokhwa = { version = "0.10", features = ["input-msmf"] }
 image = "0.25"
 nokhwa-core = "0.1"
+base64 = "0.22"
+eframe = "0.37"
 tapo = "0.11"
 kasa-rs = "0.1"
 shelly-core = "0.2"

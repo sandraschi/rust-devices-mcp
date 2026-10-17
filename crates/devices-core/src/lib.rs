@@ -25,6 +25,7 @@ pub mod plug_kasa;
 pub mod plug_shelly;
 pub mod plug_tapo;
 pub mod ring;
+pub mod weather;
 
 use creds::{Credentials, Vendor};
 use serde_json::{json, Value};
@@ -44,6 +45,7 @@ pub const CMD_RING_DOORBELLS: &str = "ring.doorbells";
 pub const CMD_RING_ALARM: &str = "ring.alarm";
 pub const CMD_RING_AUTH: &str = "ring.auth";
 pub const CMD_RING_AUTH_2FA: &str = "ring.auth_2fa";
+pub const CMD_WEATHER: &str = "weather.now";
 
 /// `None` credentials (rely on env) for terse call sites.
 pub fn no_creds() -> Credentials {
@@ -128,6 +130,10 @@ pub enum Command {
         password: Option<String>,
         token_file: Option<String>,
     },
+    Weather {
+        latitude: Option<f64>,
+        longitude: Option<f64>,
+    },
 }
 
 fn encode<T: serde::Serialize>(op: &str, result: Result<T, error::DeviceError>) -> Value {
@@ -153,7 +159,7 @@ pub async fn dispatch(cmd: Command) -> Value {
                 CMD_CAMERA_DESCRIBE, CMD_CAMERA_SNAPSHOT,
                 CMD_HUE_LIGHTS, CMD_HUE_SET, CMD_HUE_PAIR, CMD_NETATMO,
                 CMD_RING_STATUS, CMD_RING_DOORBELLS, CMD_RING_ALARM,
-                CMD_RING_AUTH, CMD_RING_AUTH_2FA,
+                CMD_RING_AUTH, CMD_RING_AUTH_2FA, CMD_WEATHER,
             ],
             "agent_contract": "CLI-first: every command supports --json; `mcp` subcommand mirrors the same dispatch over stdio",
         }),
@@ -295,6 +301,10 @@ pub async fn dispatch(cmd: Command) -> Value {
             "ring.auth_2fa",
             ring::submit_2fa(&code, email, password, token_file).await,
         ),
+        Command::Weather {
+            latitude,
+            longitude,
+        } => encode("weather.now", weather::now(latitude, longitude).await),
     }
 }
 
@@ -320,7 +330,7 @@ mod tests {
             .and_then(|c| c.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(cmds.len(), 14);
+        assert_eq!(cmds.len(), 15);
     }
 
     #[tokio::test]
