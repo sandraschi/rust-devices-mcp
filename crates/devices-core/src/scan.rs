@@ -52,6 +52,16 @@ fn http_client() -> Result<reqwest::Client, DeviceError> {
         .map_err(|e| DeviceError::Protocol(format!("scan http client: {e}")))
 }
 
+/// Identification-only client: Hue Bridge Pro serves HTTPS with a
+/// self-signed cert. LAN-scoped, never used for anything else.
+fn insecure_client() -> Result<reqwest::Client, DeviceError> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(900))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .map_err(|e| DeviceError::Protocol(format!("scan https client: {e}")))
+}
+
 async fn tcp_open(ip: &str, port: u16) -> bool {
     tokio::time::timeout(
         Duration::from_millis(450),
@@ -65,18 +75,29 @@ async fn tcp_open(ip: &str, port: u16) -> bool {
 /// Identify an open HTTP port precisely where possible.
 async fn identify(http: &reqwest::Client, ip: &str, port: u16, guess: &str) -> FoundDevice {
     let base = || format!("http://{ip}:{port}");
-    // Hue bridges answer /api/config.json with their name, no auth.
+    // Hue bridges answer /api/config.json with their name, no auth —
+    // over HTTP on classic bridges, HTTPS (self-signed) on Bridge Pro.
     if port == 80 || port == 8080 || port == 443 {
-        let url = format!("{}/api/config.json", base());
-        if let Ok(resp) = http.get(&url).send().await {
-            if let Ok(body) = resp.json::<serde_json::Value>().await {
-                if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
-                    return FoundDevice {
-                        ip: ip.to_string(),
-                        port,
-                        kind: "hue".to_string(),
-                        label: format!("Hue bridge ({name})"),
-                    };
+        let mut urls = vec![format!("{}/api/config.json", base())];
+        if port == 443 {
+            urls.push(format!("https://{ip}:{port}/api/config.json"));
+        }
+        for url in urls {
+            let client = if url.starts_with("https://") {
+                insecure_client().unwrap_or_else(|_| http.clone())
+            } else {
+                http.clone()
+            };
+            if let Ok(resp) = client.get(&url).send().await {
+                if let Ok(body) = resp.json::<serde_json::Value>().await {
+                    if let Some(name) = body.get("name").and_then(|v| v.as_str()) {
+                        return FoundDevice {
+                            ip: ip.to_string(),
+                            port,
+                            kind: "hue".to_string(),
+                            label: format!("Hue bridge ({name})"),
+                        };
+                    }
                 }
             }
         }

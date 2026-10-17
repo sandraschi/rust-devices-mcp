@@ -248,8 +248,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings  # clean
 cargo fmt --all --check                                         # clean
 ```
 
-Last verified 2026-10-17: tests 44/44, clippy clean, fmt clean, stdio probe
-(init/list/2×call) OK, release bins 11.5 + 31 MB + 16.8 MB installer, cold boot ~50–70 ms.
+Last verified 2026-10-17: tests 58/58, clippy clean, fmt clean, stdio probe
+(init/list/2×call) OK, release bins ~13 + ~34 MB + ~19 MB installer, cold boot ~50–70 ms.
 
 ## Scorecard (where the stubs are)
 
