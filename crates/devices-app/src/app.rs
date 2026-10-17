@@ -131,7 +131,6 @@ pub struct DevicesApp {
     hue_user: String,
     lights: Vec<Value>,
     bri_pending: HashMap<String, u8>,
-    bri_sent_at: HashMap<String, Instant>,
     // Weather.
     wx_lat: String,
     wx_lon: String,
@@ -688,7 +687,6 @@ impl DevicesApp {
             hue_user: env_or("HUE_USERNAME"),
             lights: Vec::new(),
             bri_pending: HashMap::new(),
-            bri_sent_at: HashMap::new(),
             wx_lat: String::new(),
             wx_lon: String::new(),
             wx_card: None,
@@ -1743,6 +1741,56 @@ impl DevicesApp {
                 .color(ENERGY)
                 .strong(),
         );
+        // Device picker: fleet plugs + adopted registry plugs + manual entry.
+        let mut options: Vec<(String, String, String)> = Vec::new();
+        if !self.plug_ip.trim().is_empty() {
+            options.push((
+                format!("Manual: {}", self.plug_ip.trim()),
+                self.plug_vendor.clone(),
+                self.plug_ip.trim().to_string(),
+            ));
+        }
+        if let Some(fleet) = &self.fleet {
+            for plug in &fleet.plugs {
+                options.push((
+                    format!("{} ({})", plug.label, plug.ip),
+                    plug.vendor.to_string(),
+                    plug.ip.clone(),
+                ));
+            }
+        }
+        for device in &self.registry.devices {
+            if device.kind == "plug" {
+                options.push((
+                    format!("{} ({})", device.label, device.ip),
+                    device.vendor.clone(),
+                    device.ip.clone(),
+                ));
+            }
+        }
+        let current = format!("{}|{}", self.plug_vendor, self.plug_ip.trim());
+        ui.horizontal(|ui| {
+            ui.label("Device");
+            egui::ComboBox::from_id_salt("plug-picker")
+                .selected_text(
+                    options
+                        .iter()
+                        .find(|(_, vendor, ip)| format!("{vendor}|{ip}") == current)
+                        .map(|(label, _, _)| label.as_str())
+                        .unwrap_or("pick…"),
+                )
+                .show_ui(ui, |ui| {
+                    for (label, vendor, ip) in options {
+                        if ui
+                            .selectable_label(format!("{vendor}|{ip}") == current, label)
+                            .clicked()
+                        {
+                            self.plug_vendor = vendor;
+                            self.plug_ip = ip;
+                        }
+                    }
+                });
+        });
         combo(ui, "Vendor", &mut self.plug_vendor, VENDORS);
         field(ui, "Device IP", &mut self.plug_ip, false, "192.168.0.17");
         field(ui, "Username", &mut self.plug_user, false, "env fallback");
@@ -1824,20 +1872,19 @@ impl DevicesApp {
                 self.spawn_hue_set(id.to_string(), false, None);
             }
             let pending_bri = *self.bri_pending.entry(id.to_string()).or_insert(bri);
-            let mut slider_value = pending_bri;
-            let slider = ui.add(egui::Slider::new(&mut slider_value, 1..=254).text("brightness"));
-            self.bri_pending.insert(id.to_string(), slider_value);
-            if slider.drag_stopped() {
-                let now = Instant::now();
-                let id_string = id.to_string();
-                let last = self.bri_sent_at.get(&id_string);
-                if last
-                    .map(|t| now.duration_since(*t).as_secs() >= 1)
-                    .unwrap_or(true)
-                {
-                    self.bri_sent_at.insert(id_string, now);
-                    self.spawn_hue_set(id.to_string(), true, Some(slider_value));
-                }
+            // Stepper, not a slider: sliders compete with the page for
+            // mouse-wheel events (hover + wheel silently retargets from
+            // scroll to brightness). Discrete steps always act.
+            if ui.button("-").clicked() {
+                let next = pending_bri.saturating_sub(25).max(1);
+                self.bri_pending.insert(id.to_string(), next);
+                self.spawn_hue_set(id.to_string(), true, Some(next));
+            }
+            ui.label(format!("bri {pending_bri}"));
+            if ui.button("+").clicked() {
+                let next = pending_bri.saturating_add(25).min(254);
+                self.bri_pending.insert(id.to_string(), next);
+                self.spawn_hue_set(id.to_string(), true, Some(next));
             }
         });
     }
@@ -2409,6 +2456,64 @@ impl DevicesApp {
 
     fn page_cameras(&mut self, ui: &mut egui::Ui) {
         ui.heading("Camera snapshots (real frames)");
+        // Device picker: fleet ONVIF cams + Ring doorbells + registry + manual.
+        let mut options: Vec<(String, String, String)> = Vec::new();
+        if !self.cam_ip.trim().is_empty() {
+            options.push((
+                format!("Manual ({}): {}", self.cam_source, self.cam_ip.trim()),
+                self.cam_source.clone(),
+                self.cam_ip.trim().to_string(),
+            ));
+        }
+        if let Some(fleet) = &self.fleet {
+            for cam in &fleet.onvif_cams {
+                options.push((
+                    format!("{} ({})", cam.label, cam.ip),
+                    "onvif".to_string(),
+                    cam.ip.clone(),
+                ));
+            }
+        }
+        for bell in &self.ring_doorbells {
+            if let (Some(name), Some(id)) = (
+                bell.get("name").and_then(|v| v.as_str()),
+                bell.get("id").and_then(|v| v.as_i64()),
+            ) {
+                options.push((format!("{name} (ring)"), "ring".to_string(), id.to_string()));
+            }
+        }
+        for device in &self.registry.devices {
+            if device.kind == "camera" && (device.vendor == "tapo" || device.vendor == "onvif") {
+                options.push((
+                    format!("{} ({})", device.label, device.ip),
+                    device.vendor.clone(),
+                    device.ip.clone(),
+                ));
+            }
+        }
+        let current = format!("{}|{}", self.cam_source, self.cam_ip.trim());
+        ui.horizontal(|ui| {
+            ui.label("Device");
+            egui::ComboBox::from_id_salt("cam-picker")
+                .selected_text(
+                    options
+                        .iter()
+                        .find(|(_, source, ip)| format!("{source}|{ip}") == current)
+                        .map(|(label, _, _)| label.as_str())
+                        .unwrap_or("pick…"),
+                )
+                .show_ui(ui, |ui| {
+                    for (label, source, ip) in options {
+                        if ui
+                            .selectable_label(format!("{source}|{ip}") == current, label)
+                            .clicked()
+                        {
+                            self.cam_source = source;
+                            self.cam_ip = ip;
+                        }
+                    }
+                });
+        });
         combo(ui, "Source", &mut self.cam_source, SOURCES);
         field(ui, "Device IP / doorbell id", &mut self.cam_ip, false, "");
         field(ui, "URL", &mut self.cam_url, false, "https://…jpg");

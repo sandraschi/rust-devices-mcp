@@ -3,7 +3,12 @@
 > Project status: **ALPHA** (2026-10-17). What's live vs. stub is tracked in
 > README's verification table and docs/PRD.md — this log records changes only.
 
-## Unreleased - chat, settings, scan, store history
+## Unreleased - chat, settings, scan, store history, pickers
+
+- Device pickers on Energy/Cameras (fleet + adopted + manual) — selecting
+  between Tapo plugs/cams is a dropdown now, not typing.
+- Hue brightness steppers replace sliders (sliders compete with the page
+  for wheel events with no visible cue). Dead debounce map removed.
 
 - In-app chat (Ollama default, LM Studio, clouds) + `llm.chat`/`llm.models`
   tools (25 total) + house-context button; keys session-only or env.
