@@ -4,6 +4,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.99%20%7C%20edition%202021-orange?logo=rust)
 ![MCP](https://img.shields.io/badge/MCP-2024--11--05-green)
 ![Method](https://img.shields.io/badge/method-ArtCraft--inspired-red)
+![Status](https://img.shields.io/badge/status-alpha-orange)
 ![Binaries](https://img.shields.io/badge/release_bins-~1_MB-purple)
 
 Pure-Rust smart-home device control: smart plug power monitoring and camera
@@ -14,6 +15,11 @@ This is the **first pure-Rust repo in the sandraschi fleet** — the conversion
 template that proves the Rust-only path before it rolls out to the other
 `*-mcp` repos. It shadows `devices-mcp` (Python/FastMCP): same command surface
 (plugs, cameras), a fraction of the weight.
+
+> **Project status: ALPHA.** Real drivers are live where credentials exist
+> (Hue, Ring, Tapo plugs/cams, Netatmo, USB, weather — see the verification
+> table below); Kasa/Shelly await hardware, climate pages are placeholders,
+> binaries are unsigned. Full scope and acceptance criteria: [docs/PRD.md](docs/PRD.md).
 
 ## Why: the Python tax, measured
 

@@ -1,5 +1,8 @@
 # Changelog - rust-devices-mcp
 
+> Project status: **ALPHA** (2026-10-17). What's live vs. stub is tracked in
+> README's verification table and docs/PRD.md — this log records changes only.
+
 ## v0.2.0 (2026-10-17) - real drivers (tier-2 + tier-3) + egui dashboard + keyless weather
 
 - Plugs for ALL vendors: Tapo P100/P105/P110/P115 (`tapo` crate, P115→P110
