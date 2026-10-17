@@ -1,0 +1,19 @@
+[package]
+name = "rust-devices-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "L2 CLI-first binary + MCP stdio server over devices-core (ArtCraft cadcraft pattern)"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "rust-devices-mcp"
+path = "src/main.rs"
+
+[dependencies]
+devices-core = { path = "../devices-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true

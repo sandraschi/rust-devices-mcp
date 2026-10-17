@@ -1,0 +1,17 @@
+[package]
+name = "devices-app"
+version = "0.1.0"
+edition = "2021"
+description = "L3 desktop shell: in-process Tauri command handlers over devices-core (no MCP hop)"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "devices-app"
+path = "src/main.rs"
+
+[dependencies]
+devices-core = { path = "../devices-core" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

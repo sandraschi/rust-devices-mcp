@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rust-devices-mcp",
+  "version": "0.1.0",
+  "identifier": "com.sandraschi.rust-devices-mcp",
+  "build": {
+    "frontendDist": "../ui/dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [{ "title": "Devices (Rust)", "width": 1100, "height": 720 }],
+    "security": { "csp": "default-src 'self'" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
+  },
+  "_note": "Tier-4 placeholder: v0.1 proves core+MCP+CLI. Enabling the real Tauri shell only adds the tauri crate + ui/dist; command signatures in src/main.rs are already handler-shaped."
+}
