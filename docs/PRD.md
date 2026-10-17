@@ -33,8 +33,11 @@ No general-public release planned in alpha — binaries are unsigned.
 | F9 | Camera snapshots: tapo / onvif / usb / ring / url → file + metadata | ✅ Live (tapo, usb, ring, url, demo; ONVIF-generic pending non-Tapo HW) |
 | F10 | Fleet import: IPs + auth from devices-mcp checkout (permitted) | ✅ Live (readonly-plug guard included) |
 | F11 | Current-user NSIS installer + uninstaller | ✅ Live (16.8 MB bundle) |
-| F12 | MCP stdio server, 15 tools, stderr-logging invariant | ✅ Live |
+| F12 | MCP stdio server, 15 tools, stderr-logging invariant | ✅ Live (18 tools since bridge) |
 | F13 | `--smoke` headless parity path for CI | ✅ Live |
+| F14 | Live RTSP video in-app (retina + openh264, FPS player) | ✅ Live (Tapo cam, 3 frames/0.46s oracle) |
+| F15 | Crossconnect client (aiwatcher/speech/webhook, no new server) | ✅ Live (server spoke; aiwatcher-down path graceful) |
+| F16 | Help page + parity flow + glyph guards | ✅ Live |
 
 ## 4. UI/UX requirements
 

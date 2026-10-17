@@ -30,6 +30,10 @@ rust-devices-mcp ring-status | ring-doorbells [--email --password --token-file] 
 rust-devices-mcp ring-alarm [--mode disarmed|home|away] [--location-id …] [--json]
 rust-devices-mcp ring-auth [--email --password] [--json]
 rust-devices-mcp ring-auth-2fa --code <CODE> [--json]
+rust-devices-mcp weather [--lat --lon] [--json]
+rust-devices-mcp bridge-event --title <T> [--summary --urgency --base] [--json]
+rust-devices-mcp bridge-speak --text <T> [--provider --base] [--json]
+rust-devices-mcp bridge-webhook --url <U> --title <T> [--summary] [--json]
 rust-devices-mcp mcp
 ```
 
@@ -61,6 +65,6 @@ crash. Probe:
 
 ## Tests
 
-8 unit tests: catalog holds 14 tools, unknown tool → error content, missing
+8 unit tests: catalog holds 18 tools, unknown tool → error content, missing
 `state` defaults without panic. Plus the live stdio probe in CI-by-hand
 (see root README verification). Run: `cargo test -p rust-devices-mcp`.

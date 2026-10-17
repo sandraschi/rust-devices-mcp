@@ -1,16 +1,18 @@
 # Install — rust-devices-mcp v0.1.0
 
-Two self-contained Windows x64 binaries, ~1 MB total. No installer, no
-runtime, no admin rights. Uninstall = delete the files.
+Two self-contained Windows x64 binaries (~43 MB total) plus an installer.
+No runtime, no admin rights. Uninstall = delete the files (or Add/Remove Programs).
 
 ## 1. Download
 
-From the [v0.1.0 release](https://github.com/sandraschi/rust-devices-mcp/releases/tag/v0.1.0):
+From the [latest release](https://github.com/sandraschi/rust-devices-mcp/releases/latest):
 
-- `rust-devices-mcp.exe` (0.81 MB) — CLI + MCP server. **This is the tool.**
+- `Devices-Rust-<ver>-setup.exe` (~17 MB) — installer: Start Menu entry,
+  Add/Remove Programs + uninstaller. Easiest path.
+- `rust-devices-mcp.exe` (~11 MB) — CLI + MCP server. **This is the tool.**
 - `devices-app.exe` (~31 MB, self-contained) — the **egui desktop dashboard**:
   double-click, no install. Sidebar mirrors the webapp (Dashboard, Energy,
-  Lighting, Cameras, Weather, Alarms). Fields persist across restarts
+  Lighting, Cameras, Weather, Alarms, Crossconnect, Help). Fields persist across restarts
   (passwords never do). `devices-app.exe --smoke` self-tests without a window.
 - `SHA256SUMS.txt` — verify with:
   `Get-FileHash .\rust-devices-mcp.exe -Algorithm SHA256` and compare.
@@ -32,11 +34,10 @@ cd C:\Tools\rust-devices-mcp
 .\rust-devices-mcp.exe camera-describe --device-ip 192.168.1.51 --json
 ```
 
-> ⚠️ **Honest-stub warning:** v0.1 drivers are deterministic fakes.
-> `plug-stats` reports **42.5 W / 0.85 kWh for any IP**, `plug-toggle` flips
-> nothing (`updated: true` is theater). This release proves the plumbing —
-> parsing → dispatch → JSON, identical over CLI and MCP — not the hardware
-> handshake. Real Tapo drivers are tier-2 (see README scorecard).
+> ⚠️ **Honest-driver note:** most drivers are REAL (Tapo plugs/cams, Hue,
+> Ring, Netatmo, USB, weather — all proven live, see README). `--vendor demo`
+> / `--source demo` remain deterministic fakes (42.5 W / stub JPEG) for CI
+> and offline probes. Kasa/Shelly have no hardware on the reference LAN.
 
 ## 3. Credentials (v0.2+ real drivers)
 
@@ -44,14 +45,19 @@ Explicit flags win; environment is the fallback; nothing is ever logged:
 
 | Vendor | Env vars |
 |---|---|
-| Tapo plugs | `TAPO_EMAIL` (or `TAPO_USERNAME`) + `TAPO_PASSWORD` |
-| Tapo cameras | above (handshake) + `CAMERA_USERNAME`/`CAMERA_PASSWORD` (or `TAPO_CAMERA_*`) |
+| Tapo plugs | `TAPO_EMAIL`/`TAPO_USERNAME`/`TAPO_P115_EMAIL`/`TAPO_LIGHTING_EMAIL` + matching `*_PASSWORD` |
+| Tapo cameras | above (handshake) + `CAMERA_USERNAME`/`CAMERA_PASSWORD` (or `TAPO_CAMERA_*`, `TAPO_CAMERA_2_*` per camera) |
 | Kasa | `KASA_USERNAME` + `KASA_PASSWORD` (legacy XOR needs none) |
 | Shelly | `SHELLY_PASSWORD` (optional) |
-| Hue | `HUE_BRIDGE_IP` + `HUE_USERNAME` (pair once: `hue-pair` after pressing the link button) |
+| Hue | `HUE_BRIDGE_IP` + `HUE_USERNAME` (or `HUE_BRIDGE_USERNAME`; pair once: `hue-pair` after pressing the link button) |
 | Netatmo | `NETATMO_CLIENT_ID` + `NETATMO_CLIENT_SECRET` + `NETATMO_REFRESH_TOKEN` |
 | Ring | `RING_EMAIL` + `RING_PASSWORD` (first login, maybe 2FA) or token cache (`RING_TOKEN_FILE`, default `ring_token.cache`) |
 | ONVIF | `CAMERA_USERNAME` + `CAMERA_PASSWORD`, `--onvif-port` (default 2020) |
+| Bridge | `AIWATCHER_BASE_URL` (default :10946), `SPEECH_BASE_URL` (default :10909) |
+
+On a fleet machine the app imports all of this from the devices-mcp
+checkout automatically (see README “Fleet import”) — env vars are the
+override path, and what CLI/MCP users set.
 
 ```powershell
 $env:TAPO_EMAIL = "you@example.com"; $env:TAPO_PASSWORD = "..."
@@ -79,9 +85,11 @@ No ports, no daemon to start, logs on stderr, JSON-RPC on stdout.
 ```
 
 Fully quit Claude Desktop (tray icon too), restart, and look for the tools
-icon: `status`, `plug.get_stats`, `plug.toggle`, `camera.describe`,
-`camera.snapshot_meta`. Try: *"What is the power draw of the plug at
-192.168.1.50?"* (expect the canned 42.5 W — see stub warning).
+icon: 18 tools (`status`, `plug.get_stats`, `plug.toggle`,
+`camera.describe`, `camera.snapshot`, `hue.*`, `netatmo.stations`,
+`ring.*`, `weather.now`, `bridge.*`). Try: *"What is the power draw of
+the plug at 192.168.1.50?"* (needs Tapo creds or `--vendor demo` for the
+canned 42.5 W).
 
 **Claude Code:**
 
@@ -97,16 +105,18 @@ claude mcp add rust-devices -- C:\Tools\rust-devices-mcp\rust-devices-mcp.exe mc
 '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | .\rust-devices-mcp.exe mcp
 ```
 
-## 4. Troubleshooting
+## 5. Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
-| SmartScreen block | Unsigned v0.1 binary — *More info → Run anyway* |
+| SmartScreen block | Unsigned alpha binary — *More info → Run anyway* |
 | Client shows no tools | Config path typo, or Claude Desktop wasn't fully restarted |
 | Garbage on stdout | Nothing should log to stdout; report it as a bug (stdio invariant) |
-| Real plug readings | Not in v0.1 — stub warning above; tier-2 delivers hardware truth |
+| `auth failed: …` | Missing secret — the error names the exact env var; see table above |
+| aiwatcher event fails | aiwatcher backend (`:10946`) isn't running — start it first; the error is graceful |
+| Live video stalls | Camera RTSP unreachable or wrong creds; snapshots still work — check IP/user/pass |
 
-## 5. Uninstall / upgrade
+## 6. Uninstall / upgrade
 
 Delete the folder. For a new release, overwrite the exes in place — client
 configs keep working because the path doesn't change.

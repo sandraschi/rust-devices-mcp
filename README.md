@@ -152,11 +152,15 @@ Every command supports `--json` for agent driving without MCP:
 | `ring-alarm` | `--mode disarmed\|home\|away` (omit = read), `--location-id`, `--json` | Alarm state / arm / disarm (no siren — by design) |
 | `ring-auth` | `--email/--password`, `--json` | First login (may report 2FA pending) |
 | `ring-auth-2fa` | `--code`, `--json` | Complete Ring 2FA |
+| `weather` | `--lat/--lon`, `--json` | Keyless Open-Meteo (Vienna default) |
+| `bridge-event` | `--title`, `--summary?`, `--urgency?`, `--json` | Push to aiwatcher Fleet Events |
+| `bridge-speak` | `--text`, `--provider?`, `--json` | Speak via speech-mcp |
+| `bridge-webhook` | `--url`, `--title`, `--summary?`, `--json` | POST to any webhook |
 | `mcp` | — | MCP 2024-11-05 server on stdio |
 
 ## MCP contract
 
-Fourteen tools, one dispatch loop:
+Eighteen tools, one dispatch loop:
 
 | Tool | Params | Returns |
 |---|---|---|
@@ -199,6 +203,8 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 | USB webcam (index 0+1) | ✅ real MJPEG frames, 640×480 parsed from SOF0 |
 | Public URL snapshot | ✅ httpbin JPEG 239×178 (devices-mcp's city-webcam URLs are 404 — config rot, not our bug) |
 | Demo vendor/source | ✅ deterministic oracle for CI |
+| Live RTSP video | ✅ 3 decoded frames in 0.46s from Tapo cam (retina + openh264, no ffmpeg; UI player with FPS) |
+| Crossconnect speech | ✅ server spoke live via speech-mcp (aiwatcher backend was down — typed error, graceful) |
 | Kasa, Shelly, ONVIF-generic | ⏳ code-complete + unit-tested, no hardware on this LAN (Tapo ONVIF faults GetSnapshotUri on all profiles — firmware quirk, native path used instead) |
 
 Credential fence proven by design: every missing secret yields a typed Auth
@@ -242,7 +248,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings  # clean
 cargo fmt --all --check                                         # clean
 ```
 
-Last verified 2026-10-17: tests 37/37, clippy clean, fmt clean, stdio probe
+Last verified 2026-10-17: tests 44/44, clippy clean, fmt clean, stdio probe
 (init/list/2×call) OK, release bins 11.5 + 31 MB + 16.8 MB installer, cold boot ~50–70 ms.
 
 ## Scorecard (where the stubs are)
@@ -251,8 +257,8 @@ Last verified 2026-10-17: tests 37/37, clippy clean, fmt clean, stdio probe
 |---|---|---|
 | v0.1 | Command surface, dispatch, CLI+MCP+app shell, deterministic stubs | ✅ Released |
 | Tier-2 (plugs) | Real Tapo (`tapo` crate, P115→P110 fallback), Kasa (XOR→KLAP auto), Shelly (Gen1/Gen2 probe) | ✅ Code-complete; Tapo/Kasa/Shelly await creds/hardware |
-| Tier-2 (vendors) | Hue CLIP v1 + pairing, Netatmo OAuth2, Ring OAuth2+2FA + doorbells + alarms | ✅ Hue + Ring proven live; Netatmo awaits secret |
-| Tier-3 (cameras) | Real frames: tapo/onvif/usb/ring/url; SOF parser; `--out` files, metadata-only MCP | ✅ USB/URL/Ring/demo proven live; Tapo/ONVIF await camera passwords |
+| Tier-2 (vendors) | Hue CLIP v1 + pairing, Netatmo OAuth2, Ring OAuth2+2FA + doorbells + alarms | ✅ Hue + Ring + Netatmo proven live |
+| Tier-3 (cameras) | Real frames: tapo/onvif/usb/ring/url; SOF parser; `--out` files, metadata-only MCP; live RTSP (retina+openh264, UI player) | ✅ All sources proven live except ONVIF-generic (firmware quirk, Tapo-native used) |
 | Tier-4 | egui dashboard (sidebar + per-device pages, high-contrast), `--smoke` CI | ✅ Done (Tauri prototyped then removed per Rust standard) |
 | Deferred | Vision/OpenCV, voice, Plex, ONVIF, Ring/Nest/Hue, SDR, web dashboard | One `Command` variant each |
 
