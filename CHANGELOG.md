@@ -3,7 +3,7 @@
 > Project status: **ALPHA** (2026-10-17). What's live vs. stub is tracked in
 > README's verification table and docs/PRD.md — this log records changes only.
 
-## Unreleased - bridge, help, video live
+## v0.4.0 (2026-10-17) - live video, bridge, help, import fixes
 
 - Crossconnect: `bridge.rs` client (aiwatcher events, speech-mcp TTS,
   generic webhooks) + `bridge.event/speak/webhook` tools (18 total) +
@@ -12,7 +12,7 @@
 - Help page: first-run guide, credentials cheat sheet, UI tricks, links.
 - Live RTSP video (no ffmpeg) below (unchanged).
 
-## Unreleased - live RTSP video (no ffmpeg)
+### Live RTSP video (no ffmpeg) — same release
 
 - `video.rs`: retina RTSP session (describe/setup/play/demux) + openh264
   decode + Annex-B framing converter, feeding RGB frames to the UI player.

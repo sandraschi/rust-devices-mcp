@@ -1,6 +1,6 @@
 [package]
 name = "devices-core"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "L1 device protocols, state machine, and command bus (no UI/MCP deps)"
 license = "MIT OR Apache-2.0"

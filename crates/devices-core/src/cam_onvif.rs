@@ -7,6 +7,55 @@ use crate::creds::{classify_vendor_error, with_timeout_secs};
 use crate::error::DeviceError;
 use std::time::Duration;
 
+pub async fn stream_uri(
+    ip: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+) -> Result<String, DeviceError> {
+    let base = format!("http://{ip}:{port}/onvif/device_service");
+    let session = with_timeout_secs("onvif.session", 20, async {
+        oxvif::OnvifSession::builder(&base)
+            .with_credentials(username, password)
+            .with_clock_sync()
+            .build()
+            .await
+    })
+    .await?
+    .map_err(|e| classify_vendor_error(format!("onvif session: {e}")))?;
+    let profiles = with_timeout_secs("onvif.profiles", 20, session.get_profiles())
+        .await?
+        .map_err(|e| classify_vendor_error(format!("onvif profiles: {e}")))?;
+    if profiles.is_empty() {
+        return Err(DeviceError::Unsupported(
+            "onvif: camera returned no media profiles".to_string(),
+        ));
+    }
+    let mut last_err =
+        DeviceError::Unsupported("onvif: no profile produced a stream URI".to_string());
+    for profile in &profiles {
+        if profile.token.trim().is_empty() {
+            continue;
+        }
+        match with_timeout_secs(
+            "onvif.stream_uri",
+            20,
+            session.get_stream_uri(&profile.token),
+        )
+        .await
+        {
+            Ok(Ok(snap)) => return Ok(snap.uri),
+            Ok(Err(e)) => {
+                last_err = classify_vendor_error(format!("onvif stream_uri: {e}"));
+            }
+            Err(e) => {
+                last_err = e;
+            }
+        }
+    }
+    Err(last_err)
+}
+
 pub async fn grab(
     ip: &str,
     port: u16,
