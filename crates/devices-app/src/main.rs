@@ -14,6 +14,8 @@
 use eframe::egui;
 
 mod app;
+mod registry;
+mod vault;
 
 fn main() -> eframe::Result<()> {
     if std::env::args().any(|arg| arg == "--smoke") {

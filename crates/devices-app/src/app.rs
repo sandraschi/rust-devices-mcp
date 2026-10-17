@@ -33,6 +33,7 @@ enum Page {
     DoorbellDetail(i64),
     Crossconnect,
     Chat,
+    Settings,
     Help,
     Raw,
 }
@@ -51,6 +52,7 @@ impl Page {
             Self::DoorbellDetail(id) => format!("Doorbell {id}"),
             Self::Crossconnect => "Crossconnect".to_string(),
             Self::Chat => "Chat".to_string(),
+            Self::Settings => "Settings".to_string(),
             Self::Help => "Help".to_string(),
             Self::Raw => "Raw JSON".to_string(),
         }
@@ -70,6 +72,7 @@ enum Job {
     },
     Ring(Value),
     Bridge(Value),
+    Scan(Value),
     Chat(Value),
     ChatContext(String),
     ChatModels(Value),
@@ -142,6 +145,13 @@ pub struct DevicesApp {
     ring_pass: String,
     ring_token: String,
     ring_id: String,
+    scan_subnet: String,
+    scan_results: Vec<Value>,
+    registry: crate::registry::Registry,
+    manual_label: String,
+    manual_ip: String,
+    manual_vendor: String,
+    vault_note: String,
     bridge_aiwatcher: String,
     bridge_speech: String,
     bridge_webhook_url: String,
@@ -689,6 +699,13 @@ impl DevicesApp {
             ring_pass: String::new(),
             ring_token: env_or("RING_TOKEN_FILE"),
             ring_id: String::new(),
+            scan_subnet: String::new(),
+            scan_results: Vec::new(),
+            registry: crate::registry::Registry::default(),
+            manual_label: String::new(),
+            manual_ip: String::new(),
+            manual_vendor: String::from("tapo"),
+            vault_note: String::new(),
             bridge_aiwatcher: String::new(),
             bridge_speech: String::new(),
             bridge_webhook_url: String::new(),
@@ -711,6 +728,8 @@ impl DevicesApp {
             alarm_location: String::new(),
         };
         app.load_fields();
+        app.load_vault();
+        app.registry = crate::registry::load();
         apply_theme(&ctx.egui_ctx, app.dark_mode);
         ctx.egui_ctx.set_zoom_factor(app.zoom_saved);
         app.apply_fleet_import();
@@ -934,6 +953,15 @@ impl DevicesApp {
                             .collect();
                     }
                 }
+                Job::Scan(value) => {
+                    self.show_raw(&value);
+                    if let Some(list) = value.get("devices").and_then(|v| v.as_array()) {
+                        self.scan_results = list.clone();
+                        self.note(format!("scan found {} open ports", list.len()));
+                    } else {
+                        self.note("scan failed — see Raw JSON");
+                    }
+                }
                 Job::Ring(value) => {
                     self.show_raw(&value);
                     if let Some(list) = value.get("doorbells").and_then(|v| v.as_array()) {
@@ -1008,6 +1036,18 @@ impl DevicesApp {
         if let Some(idx) = inv.usb_index {
             self.cam_index = idx.to_string();
         }
+        if self.scan_subnet.trim().is_empty() {
+            // Default scan range from the first known plug's /24.
+            if let Some(ip) = inv.plugs.first().map(|plug| plug.ip.clone()) {
+                let mut parts = ip.split('.');
+                if let (Some(a), Some(b), Some(c)) = (parts.next(), parts.next(), parts.next()) {
+                    self.scan_subnet = format!("{a}.{b}.{c}");
+                }
+            }
+            if self.scan_subnet.trim().is_empty() {
+                self.scan_subnet = "192.168.0".to_string();
+            }
+        }
         self.note(format!(
             "fleet import: {} plugs, {} onvif cams{}",
             inv.plugs.len(),
@@ -1018,6 +1058,56 @@ impl DevicesApp {
                 ""
             }
         ));
+    }
+
+    /// OS-vault secrets into session fields (boot only). Missing vault =
+    /// session-only mode with a note; never a crash, never a log line.
+    fn load_vault(&mut self) {
+        let mut loaded = 0u32;
+        let mut missing_vault = false;
+        let mut pull = |slot: &str, slot_field: &mut String| match crate::vault::get(slot) {
+            Ok(Some(secret)) if slot_field.trim().is_empty() => {
+                *slot_field = secret;
+                true
+            }
+            Ok(_) => false,
+            Err(_) => {
+                missing_vault = true;
+                false
+            }
+        };
+        // Borrow dance: pull() takes &mut field; call per field.
+        if pull(crate::vault::TAPO_PASSWORD, &mut self.plug_pass) {
+            loaded += 1;
+        }
+        if pull(crate::vault::CAMERA_PASSWORD, &mut self.cam_pass) {
+            loaded += 1;
+        }
+        if pull(crate::vault::RING_PASSWORD, &mut self.ring_pass) {
+            loaded += 1;
+        }
+        if pull(crate::vault::LLM_API_KEY, &mut self.chat_key) {
+            loaded += 1;
+        }
+        self.vault_note = if missing_vault {
+            "OS vault unavailable — secrets are session-only this run.".to_string()
+        } else if loaded > 0 {
+            format!("{loaded} secrets loaded from the OS vault.")
+        } else {
+            "OS vault reachable — no secrets stored yet (see Settings).".to_string()
+        };
+    }
+
+    fn save_secret(&mut self, slot: &str, secret: &str) {
+        match crate::vault::set(slot, secret) {
+            Ok(()) => {
+                self.vault_note = format!("saved {slot} to the OS vault.");
+                self.save_fields();
+            }
+            Err(e) => {
+                self.vault_note = format!("vault write failed ({e}) — session-only.");
+            }
+        }
     }
 
     fn plug_creds(&self) -> Result<(Vendor, Credentials), String> {
@@ -1547,6 +1637,7 @@ impl eframe::App for DevicesApp {
                 });
                 self.nav_button(ui, Page::Crossconnect);
                 self.nav_button(ui, Page::Chat);
+                self.nav_button(ui, Page::Settings);
                 self.nav_button(ui, Page::Help);
                 self.nav_button(ui, Page::Raw);
             });
@@ -1564,6 +1655,7 @@ impl eframe::App for DevicesApp {
             Page::DoorbellDetail(id) => self.page_doorbell_detail(ui, id),
             Page::Crossconnect => self.page_crossconnect(ui),
             Page::Chat => self.page_chat(ui),
+            Page::Settings => self.page_settings(ui),
             Page::Help => self.page_help(ui),
             Page::Raw => {
                 ui.heading("Raw JSON");
@@ -2239,6 +2331,13 @@ impl DevicesApp {
         });
     }
 
+    fn spawn_scan(&mut self) {
+        let subnet = self.scan_subnet.trim().to_string();
+        self.note(format!("scanning {subnet} (~15s)…"));
+        self.scan_results.clear();
+        self.spawn(move || async move { Job::Scan(dispatch(Command::NetScan { subnet }).await) });
+    }
+
     fn spawn_weather_latlon(&mut self, lat: Option<f64>, lon: Option<f64>) {
         self.note("fetching weather…");
         self.spawn(move || async move {
@@ -2546,6 +2645,199 @@ impl DevicesApp {
             let enter_pressed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if send_clicked || enter_pressed {
                 self.spawn_chat();
+            }
+        });
+    }
+
+    fn page_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Settings — onboarding Joe Schmoe");
+        ui.label(&self.vault_note);
+        card_frame(ui, |ui| {
+            ui.heading("Tapo account");
+            field(
+                ui,
+                "Email",
+                &mut self.plug_user,
+                false,
+                "also plug username",
+            );
+            field(
+                ui,
+                "Password",
+                &mut self.plug_pass,
+                true,
+                "stored in OS vault",
+            );
+            if ui.button("Save Tapo password to vault").clicked() {
+                let pass = self.plug_pass.clone();
+                self.save_secret(crate::vault::TAPO_PASSWORD, &pass);
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("Camera login");
+            field(ui, "Username", &mut self.cam_user, false, "");
+            field(
+                ui,
+                "Password",
+                &mut self.cam_pass,
+                true,
+                "stored in OS vault",
+            );
+            if ui.button("Save camera password to vault").clicked() {
+                let pass = self.cam_pass.clone();
+                self.save_secret(crate::vault::CAMERA_PASSWORD, &pass);
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("Hue bridge");
+            field(ui, "Bridge IP", &mut self.hue_ip, false, "192.168.0.236");
+            field(ui, "Username", &mut self.hue_user, false, "pair once below");
+            if ui.button("Pair (press link button first)").clicked() {
+                let ip = self.hue_ip.trim().to_string();
+                self.note("pairing — press the link button, watch Raw JSON");
+                self.spawn(move || async move {
+                    Job::Bridge(dispatch(Command::HuePair { bridge_ip: ip }).await)
+                });
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("Ring");
+            field(ui, "Email", &mut self.ring_email, false, "");
+            field(
+                ui,
+                "Password",
+                &mut self.ring_pass,
+                true,
+                "stored in OS vault",
+            );
+            field(
+                ui,
+                "Token file",
+                &mut self.ring_token,
+                false,
+                "ring_token.cache",
+            );
+            if ui.button("Save Ring password to vault").clicked() {
+                let pass = self.ring_pass.clone();
+                self.save_secret(crate::vault::RING_PASSWORD, &pass);
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("LLM (Chat page)");
+            field(
+                ui,
+                "API key",
+                &mut self.chat_key,
+                true,
+                "session-only unless saved",
+            );
+            if ui.button("Save LLM key to vault").clicked() {
+                let key = self.chat_key.clone();
+                self.save_secret(crate::vault::LLM_API_KEY, &key);
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("Network scan — find new devices");
+            field(
+                ui,
+                "Subnet",
+                &mut self.scan_subnet,
+                false,
+                "192.168.0 or 192.168.0.0/24",
+            );
+            if primary(ui, "Scan LAN").clicked() {
+                self.spawn_scan();
+            }
+            for hit in self.scan_results.clone() {
+                let ip = hit.get("ip").and_then(|v| v.as_str()).unwrap_or("?");
+                let port = hit.get("port").and_then(|v| v.as_u64()).unwrap_or(0);
+                let kind = hit
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let label = hit.get("label").and_then(|v| v.as_str()).unwrap_or("?");
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("{ip}:{port}"));
+                    ui.label(format!("{kind} — {label}"));
+                    if ui.button("Adopt").clicked() {
+                        let device = crate::registry::adopt(ip, port as u16, kind, label);
+                        self.registry.devices.retain(|d| d.id != device.id);
+                        self.registry.devices.push(device);
+                        crate::registry::save(&self.registry);
+                        self.note(format!("adopted {ip}:{port}"));
+                    }
+                });
+            }
+            if self.pending > 0 {
+                ui.spinner();
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("My devices (adopted + manual)");
+            field(
+                ui,
+                "Label",
+                &mut self.manual_label,
+                false,
+                "Living room plug",
+            );
+            field(ui, "IP", &mut self.manual_ip, false, "192.168.0.x");
+            combo(ui, "Vendor", &mut self.manual_vendor, VENDORS);
+            if ui.button("Add device").clicked() {
+                let ip = self.manual_ip.trim().to_string();
+                if !ip.is_empty() {
+                    let device = crate::registry::RegDevice {
+                        id: format!("manual:{ip}"),
+                        kind: "plug".to_string(),
+                        vendor: self.manual_vendor.clone(),
+                        label: if self.manual_label.trim().is_empty() {
+                            ip.clone()
+                        } else {
+                            self.manual_label.trim().to_string()
+                        },
+                        ip,
+                        port: None,
+                        username: String::new(),
+                    };
+                    self.registry.devices.retain(|d| d.id != device.id);
+                    self.registry.devices.push(device);
+                    crate::registry::save(&self.registry);
+                    self.manual_label.clear();
+                    self.manual_ip.clear();
+                }
+            }
+            let mut remove_id = None;
+            for device in &self.registry.devices {
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "{} — {} ({})",
+                        device.label, device.ip, device.vendor
+                    ));
+                    if ui.button("Use").clicked() {
+                        if device.kind == "plug" {
+                            self.plug_vendor = device.vendor.clone();
+                            self.plug_ip = device.ip.clone();
+                            self.page = Page::Energy;
+                        } else if device.kind == "hue" {
+                            self.hue_ip = device.ip.clone();
+                            self.page = Page::Lighting;
+                        } else {
+                            self.cam_ip = device.ip.clone();
+                            self.page = Page::Cameras;
+                        }
+                    }
+                    if ui.button("Delete").clicked() {
+                        remove_id = Some(device.id.clone());
+                    }
+                });
+            }
+            if let Some(id) = remove_id {
+                self.registry.devices.retain(|d| d.id != id);
+                crate::registry::save(&self.registry);
+                self.note("device removed");
+            }
+            if self.registry.devices.is_empty() {
+                ui.label("No adopted devices yet — scan above or add manually.");
             }
         });
     }
