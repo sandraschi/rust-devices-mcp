@@ -45,8 +45,11 @@ impl Provider {
     }
 
     pub fn default_model(&self) -> &'static str {
+        // gemma4:12b: blueprint-copy default per the repconv canon — fits the
+        // 24 GB VRAM budget alongside residents with zero scrubbing. Override
+        // per machine via the Chat page model field or LLM_MODEL env.
         match self {
-            Self::Ollama => "qwen3.8:27b",
+            Self::Ollama => "gemma4:12b",
             Self::LmStudio => "local-model",
             Self::OpenAi => "gpt-4o-mini",
             Self::Anthropic => "claude-sonnet-4-20250514",
