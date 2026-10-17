@@ -174,6 +174,9 @@ Fourteen tools, one dispatch loop:
 | `ring.alarm` | `mode?`, `location_id?`, … | Alarm state or `{mode, updated}` |
 | `ring.auth` / `ring.auth_2fa` | `email?`, `password?` / `code` | `{authenticated: true, …}` |
 | `weather.now` | `lat?`, `lon?` (Vienna default) | Keyless Open-Meteo summary, no account |
+| `bridge.event` | `title`, `summary?`, `urgency?` | Push to aiwatcher's Fleet Events feed |
+| `bridge.speak` | `text` (max 1000), `provider?` | Speak on the server speaker via speech-mcp |
+| `bridge.webhook` | `url`, `title`, `summary?` | POST to any http(s) webhook |
 
 Framing rules (the stdio invariant): **stdout is pure JSON-RPC** — every log
 line goes to stderr. Notifications get no reply. Unknown methods → `-32601`,
@@ -200,6 +203,14 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 
 Credential fence proven by design: every missing secret yields a typed Auth
 error naming the exact env var — verified live for ONVIF, Tapo, and Ring-expired paths.
+
+## Crossconnect (no new bridge server)
+
+The fleet already runs the servers — this repo is the Rust-native caller:
+aiwatcher Fleet Events (`POST :10946/api/fleet/ingest`), speech-mcp TTS
+(`POST :10909/api/v1/tts`), plus a generic webhook. Answer to "do we need
+a new Rust crossconnect bridge": no — a thin client module (`bridge.rs`)
+is the whole need. Crossconnect page in the app, `bridge.*` tools for agents.
 
 ## Fleet import (zero-config on fleet machines)
 

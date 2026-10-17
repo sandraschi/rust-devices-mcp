@@ -11,6 +11,7 @@
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 
+pub mod bridge;
 pub mod cam_onvif;
 pub mod cam_tapo;
 pub mod cam_url;
@@ -26,6 +27,7 @@ pub mod plug_kasa;
 pub mod plug_shelly;
 pub mod plug_tapo;
 pub mod ring;
+pub mod video;
 pub mod weather;
 
 use creds::{Credentials, Vendor};
@@ -47,6 +49,9 @@ pub const CMD_RING_ALARM: &str = "ring.alarm";
 pub const CMD_RING_AUTH: &str = "ring.auth";
 pub const CMD_RING_AUTH_2FA: &str = "ring.auth_2fa";
 pub const CMD_WEATHER: &str = "weather.now";
+pub const CMD_BRIDGE_EVENT: &str = "bridge.event";
+pub const CMD_BRIDGE_SPEAK: &str = "bridge.speak";
+pub const CMD_BRIDGE_WEBHOOK: &str = "bridge.webhook";
 
 /// `None` credentials (rely on env) for terse call sites.
 pub fn no_creds() -> Credentials {
@@ -135,6 +140,22 @@ pub enum Command {
         latitude: Option<f64>,
         longitude: Option<f64>,
     },
+    BridgeEvent {
+        base: Option<String>,
+        title: String,
+        summary: Option<String>,
+        urgency: Option<f64>,
+    },
+    BridgeSpeak {
+        base: Option<String>,
+        text: String,
+        provider: Option<String>,
+    },
+    BridgeWebhook {
+        url: String,
+        title: String,
+        summary: Option<String>,
+    },
 }
 
 fn encode<T: serde::Serialize>(op: &str, result: Result<T, error::DeviceError>) -> Value {
@@ -161,6 +182,7 @@ pub async fn dispatch(cmd: Command) -> Value {
                 CMD_HUE_LIGHTS, CMD_HUE_SET, CMD_HUE_PAIR, CMD_NETATMO,
                 CMD_RING_STATUS, CMD_RING_DOORBELLS, CMD_RING_ALARM,
                 CMD_RING_AUTH, CMD_RING_AUTH_2FA, CMD_WEATHER,
+                CMD_BRIDGE_EVENT, CMD_BRIDGE_SPEAK, CMD_BRIDGE_WEBHOOK,
             ],
             "agent_contract": "CLI-first: every command supports --json; `mcp` subcommand mirrors the same dispatch over stdio",
         }),
@@ -306,6 +328,24 @@ pub async fn dispatch(cmd: Command) -> Value {
             latitude,
             longitude,
         } => encode("weather.now", weather::now(latitude, longitude).await),
+        Command::BridgeEvent {
+            base,
+            title,
+            summary,
+            urgency,
+        } => encode(
+            "bridge.event",
+            bridge::aiwatcher_event(base, &title, summary, urgency).await,
+        ),
+        Command::BridgeSpeak {
+            base,
+            text,
+            provider,
+        } => encode("bridge.speak", bridge::speak(base, &text, provider).await),
+        Command::BridgeWebhook { url, title, summary } => encode(
+            "bridge.webhook",
+            bridge::webhook(&url, &title, summary).await,
+        ),
     }
 }
 
@@ -331,7 +371,7 @@ mod tests {
             .and_then(|c| c.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(cmds.len(), 15);
+        assert_eq!(cmds.len(), 18);
     }
 
     #[tokio::test]

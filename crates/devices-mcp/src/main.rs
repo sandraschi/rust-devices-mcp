@@ -200,6 +200,41 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Push an event into aiwatcher's Fleet Events feed
+    BridgeEvent {
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        summary: Option<String>,
+        #[arg(long)]
+        urgency: Option<f64>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Speak text on the server speaker via speech-mcp
+    BridgeSpeak {
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// POST to any webhook URL (robofang, ntfy, scripts)
+    BridgeWebhook {
+        #[arg(long)]
+        url: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        summary: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Complete Ring 2FA after ring-auth reported it pending
     RingAuth2fa {
         #[arg(long)]
@@ -467,6 +502,46 @@ fn tools_list() -> Value {
                     },
                 },
             },
+            {
+                "name": "bridge.event",
+                "description": "Push an event into aiwatcher's Fleet Events feed (title required, urgency 0-10 optional).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base": {"type": "string"},
+                        "title": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "urgency": {"type": "number"},
+                    },
+                    "required": ["title"],
+                },
+            },
+            {
+                "name": "bridge.speak",
+                "description": "Speak text on the server speaker via speech-mcp (max 1000 chars).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base": {"type": "string"},
+                        "text": {"type": "string"},
+                        "provider": {"type": "string"},
+                    },
+                    "required": ["text"],
+                },
+            },
+            {
+                "name": "bridge.webhook",
+                "description": "POST {title, summary, source} to any http(s) webhook URL.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "title": {"type": "string"},
+                        "summary": {"type": "string"},
+                    },
+                    "required": ["url", "title"],
+                },
+            },
         ]
     })
 }
@@ -610,6 +685,22 @@ fn call_tool(name: &str, args: &Value) -> Value {
         "weather.now" => run(Command::Weather {
             latitude: args.get("lat").and_then(|v| v.as_f64()),
             longitude: args.get("lon").and_then(|v| v.as_f64()),
+        }),
+        "bridge.event" => run(Command::BridgeEvent {
+            base: opt(args, "base"),
+            title: opt(args, "title").unwrap_or_default(),
+            summary: opt(args, "summary"),
+            urgency: args.get("urgency").and_then(|v| v.as_f64()),
+        }),
+        "bridge.speak" => run(Command::BridgeSpeak {
+            base: opt(args, "base"),
+            text: opt(args, "text").unwrap_or_default(),
+            provider: opt(args, "provider"),
+        }),
+        "bridge.webhook" => run(Command::BridgeWebhook {
+            url: opt(args, "url").unwrap_or_default(),
+            title: opt(args, "title").unwrap_or_default(),
+            summary: opt(args, "summary"),
         }),
         _ => return wrap_err(format!("unknown tool: {name}")),
     };
@@ -861,6 +952,56 @@ fn main() {
                 "",
             );
         }
+        Commands::BridgeEvent {
+            base,
+            title,
+            summary,
+            urgency,
+            json: as_json,
+        } => {
+            show(
+                run(Command::BridgeEvent {
+                    base,
+                    title,
+                    summary,
+                    urgency,
+                }),
+                as_json,
+                "",
+            );
+        }
+        Commands::BridgeSpeak {
+            base,
+            text,
+            provider,
+            json: as_json,
+        } => {
+            show(
+                run(Command::BridgeSpeak {
+                    base,
+                    text,
+                    provider,
+                }),
+                as_json,
+                "",
+            );
+        }
+        Commands::BridgeWebhook {
+            url,
+            title,
+            summary,
+            json: as_json,
+        } => {
+            show(
+                run(Command::BridgeWebhook {
+                    url,
+                    title,
+                    summary,
+                }),
+                as_json,
+                "",
+            );
+        }
         Commands::RingAuth2fa {
             code,
             email,
@@ -966,14 +1107,14 @@ mod tests {
     use devices_core::no_creds;
 
     #[test]
-    fn catalog_lists_fifteen_tools() {
+    fn catalog_lists_eighteen_tools() {
         let catalog = tools_list();
         let tools = catalog
             .get("tools")
             .and_then(|t| t.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 18);
     }
 
     #[test]

@@ -31,6 +31,8 @@ enum Page {
     Weather,
     Alarms,
     DoorbellDetail(i64),
+    Crossconnect,
+    Help,
     Raw,
 }
 
@@ -46,6 +48,8 @@ impl Page {
             Self::Weather => "Weather".to_string(),
             Self::Alarms => "Alarms".to_string(),
             Self::DoorbellDetail(id) => format!("Doorbell {id}"),
+            Self::Crossconnect => "Crossconnect".to_string(),
+            Self::Help => "Help".to_string(),
             Self::Raw => "Raw JSON".to_string(),
         }
     }
@@ -63,6 +67,7 @@ enum Job {
         jpeg: Option<Vec<u8>>,
     },
     Ring(Value),
+    Bridge(Value),
 }
 
 struct Shot {
@@ -131,6 +136,14 @@ pub struct DevicesApp {
     ring_pass: String,
     ring_token: String,
     ring_id: String,
+    bridge_aiwatcher: String,
+    bridge_speech: String,
+    bridge_webhook_url: String,
+    bridge_title: String,
+    bridge_summary: String,
+    bridge_urgency: String,
+    bridge_text: String,
+    bridge_log: Vec<String>,
     ring_locations: Vec<Value>,
     ring_doorbells: Vec<Value>,
     alarm_mode: String,
@@ -670,6 +683,14 @@ impl DevicesApp {
             ring_pass: String::new(),
             ring_token: env_or("RING_TOKEN_FILE"),
             ring_id: String::new(),
+            bridge_aiwatcher: String::new(),
+            bridge_speech: String::new(),
+            bridge_webhook_url: String::new(),
+            bridge_title: String::new(),
+            bridge_summary: String::new(),
+            bridge_urgency: String::new(),
+            bridge_text: String::new(),
+            bridge_log: Vec::new(),
             ring_locations: Vec::new(),
             ring_doorbells: Vec::new(),
             alarm_mode: "disarmed".to_string(),
@@ -859,6 +880,19 @@ impl DevicesApp {
                         meta,
                         texture,
                     });
+                }
+                Job::Bridge(value) => {
+                    self.show_raw(&value);
+                    let line = value
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .map(|e| format!("error: {e}"))
+                        .unwrap_or_else(|| "ok".to_string());
+                    self.bridge_log.push(line);
+                    if self.bridge_log.len() > 20 {
+                        self.bridge_log.remove(0);
+                    }
+                    self.note("bridge call finished — see log");
                 }
                 Job::Ring(value) => {
                     self.show_raw(&value);
@@ -1456,6 +1490,8 @@ impl eframe::App for DevicesApp {
                         }
                     }
                 });
+                self.nav_button(ui, Page::Crossconnect);
+                self.nav_button(ui, Page::Help);
                 self.nav_button(ui, Page::Raw);
             });
         }
@@ -1470,6 +1506,8 @@ impl eframe::App for DevicesApp {
             Page::Weather => self.page_weather(ui),
             Page::Alarms => self.page_alarms(ui),
             Page::DoorbellDetail(id) => self.page_doorbell_detail(ui, id),
+            Page::Crossconnect => self.page_crossconnect(ui),
+            Page::Help => self.page_help(ui),
             Page::Raw => {
                 ui.heading("Raw JSON");
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1980,6 +2018,64 @@ impl DevicesApp {
         }
     }
 
+    fn spawn_bridge_event(&mut self) {
+        let (base, title, summary, urgency) = (
+            Self::opt(&self.bridge_aiwatcher),
+            self.bridge_title.trim().to_string(),
+            Self::opt(&self.bridge_summary),
+            self.bridge_urgency.trim().parse().ok(),
+        );
+        self.note("sending fleet event…");
+        self.spawn(move || async move {
+            Job::Bridge(
+                dispatch(Command::BridgeEvent {
+                    base,
+                    title,
+                    summary,
+                    urgency,
+                })
+                .await,
+            )
+        });
+    }
+
+    fn spawn_bridge_speak(&mut self) {
+        let (base, text) = (
+            Self::opt(&self.bridge_speech),
+            self.bridge_text.trim().to_string(),
+        );
+        self.note("speaking…");
+        self.spawn(move || async move {
+            Job::Bridge(
+                dispatch(Command::BridgeSpeak {
+                    base,
+                    text,
+                    provider: None,
+                })
+                .await,
+            )
+        });
+    }
+
+    fn spawn_bridge_webhook(&mut self) {
+        let (url, title, summary) = (
+            Self::opt(&self.bridge_webhook_url).unwrap_or_default(),
+            self.bridge_title.trim().to_string(),
+            Self::opt(&self.bridge_summary),
+        );
+        self.note("posting webhook…");
+        self.spawn(move || async move {
+            Job::Bridge(
+                dispatch(Command::BridgeWebhook {
+                    url,
+                    title,
+                    summary,
+                })
+                .await,
+            )
+        });
+    }
+
     fn spawn_weather_latlon(&mut self, lat: Option<f64>, lon: Option<f64>) {
         self.note("fetching weather…");
         self.spawn(move || async move {
@@ -2134,6 +2230,116 @@ impl DevicesApp {
                     value_rows(ui, &location);
                 });
             }
+        });
+    }
+
+    fn page_crossconnect(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Crossconnect — the fleet, from Rust");
+        ui.label("No new bridge server: this app calls its Python siblings over their localhost HTTP surfaces.");
+        card_frame(ui, |ui| {
+            ui.heading("aiwatcher — Fleet Events feed");
+            field(
+                ui,
+                "Base URL",
+                &mut self.bridge_aiwatcher,
+                false,
+                "http://127.0.0.1:10946",
+            );
+            field(ui, "Title", &mut self.bridge_title, false, "what happened");
+            field(
+                ui,
+                "Summary",
+                &mut self.bridge_summary,
+                false,
+                "optional detail",
+            );
+            field(
+                ui,
+                "Urgency 0-10",
+                &mut self.bridge_urgency,
+                false,
+                "optional",
+            );
+            if primary(ui, "Send event").clicked() {
+                self.spawn_bridge_event();
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("speech-mcp — server speaker");
+            field(
+                ui,
+                "Base URL",
+                &mut self.bridge_speech,
+                false,
+                "http://127.0.0.1:10909",
+            );
+            field(ui, "Text", &mut self.bridge_text, false, "max 1000 chars");
+            if primary(ui, "Speak").clicked() {
+                self.spawn_bridge_speak();
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("Generic webhook");
+            field(ui, "URL", &mut self.bridge_webhook_url, false, "https://…");
+            ui.label("Uses the Title/Summary fields above.");
+            if primary(ui, "POST webhook").clicked() {
+                self.spawn_bridge_webhook();
+            }
+        });
+        card_frame(ui, |ui| {
+            ui.heading("Call log");
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for line in self.bridge_log.clone() {
+                    ui.monospace(&line);
+                }
+                if self.bridge_log.is_empty() {
+                    ui.label("No calls yet this session.");
+                }
+            });
+        });
+    }
+
+    fn page_help(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Help");
+        card_frame(ui, |ui| {
+            ui.heading("First run (zero typing on a fleet machine)");
+            ui.label("1. The app imports plugs, Hue, cameras, Ring and Netatmo from the devices-mcp checkout automatically.");
+            ui.label("2. Secrets resolve: typed fields > process env > devices-mcp/.env > config. Nothing is ever logged.");
+            ui.label(
+                "3. Start on Dashboard (weather loads keyless), then Energy, Lighting, Cameras.",
+            );
+        });
+        card_frame(ui, |ui| {
+            ui.heading("Credentials cheat sheet");
+            ui.monospace(
+                "Tapo plugs:    TAPO_EMAIL + TAPO_PASSWORD (or TAPO_P115_*, TAPO_LIGHTING_*)",
+            );
+            ui.monospace("Tapo cameras:  above (handshake) + CAMERA_USERNAME + CAMERA_PASSWORD");
+            ui.monospace("Hue:           HUE_BRIDGE_IP + HUE_USERNAME (pair once with hue-pair)");
+            ui.monospace("Netatmo:       NETATMO_CLIENT_ID + _SECRET + _REFRESH_TOKEN");
+            ui.monospace("Ring:          token cache (RING_TOKEN_FILE, default ring_token.cache)");
+            ui.monospace("ONVIF:         CAMERA_* pair, --onvif-port (default 2020)");
+        });
+        card_frame(ui, |ui| {
+            ui.heading("UI tricks");
+            ui.label("Ctrl+wheel zooms the whole UI (pill in the top bar resets). Sun/moon toggles light/dark.");
+            ui.label("Snapshots save with --out on CLI; the app shows frames inline. Live video: Cameras tab, Live button.");
+            ui.label("Auth: missing secrets fail typed — the error names the exact env var. Ring has no siren control by design.");
+        });
+        card_frame(ui, |ui| {
+            ui.heading("Links");
+            ui.hyperlink_to(
+                "GitHub repo",
+                "https://github.com/sandraschi/rust-devices-mcp",
+            );
+            ui.hyperlink_to(
+                "Releases + installer",
+                "https://github.com/sandraschi/rust-devices-mcp/releases",
+            );
+            ui.hyperlink_to(
+                "MCP contract + parity flow",
+                "https://github.com/sandraschi/rust-devices-mcp/blob/main/docs/UI_PARITY.md",
+            );
         });
     }
 
