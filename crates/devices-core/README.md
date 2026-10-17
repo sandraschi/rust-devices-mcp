@@ -31,6 +31,11 @@ above it inherits its discipline.
 | `hue.rs` | CLIP v1 lights + link-button pairing (hand-rolled) |
 | `netatmo.rs` | OAuth2 refresh + stations summary (hand-rolled) |
 | `ring.rs` | OAuth2 + 2FA + doorbells/dings/history + alarms + snapshots (hand-rolled, mirrors `ring_doorbell`) |
+| `bridge.rs` | Fleet client: aiwatcher events, speech-mcp TTS, generic webhooks (no new server — siblings already run) |
+| `video.rs` | Live RTSP (retina) + H264 decode (openh264) + snapshot poller, RGB frame channel |
+| `weather.rs` | Keyless Open-Meteo + WMO table + hourly payload for charts |
+| `import.rs` | Fleet inventory + secrets from devices-mcp (operator-permitted, `${VAR:-default}` aware) |
+| `creds.rs` | `Vendor` parse, credential resolution, timeouts, shared error classifier |
 | `camera.rs` | `CamSource`, real `snapshot()` (SOI verify, SOF parse, file write), `describe` shape info |
 | `cam_tapo.rs` / `cam_onvif.rs` / `cam_usb.rs` / `cam_url.rs` | Real frame grabbers (MJPEG + RGB fallback for USB) |
 | `lib.rs` | `Command` enum (14 commands) + async `dispatch()` — the single door |
@@ -40,10 +45,11 @@ above it inherits its discipline.
 ```rust
 pub enum Command {
     Status,
-    PlugStats { device_ip: String },
-    PlugToggle { device_ip: String, state: bool },
-    CameraDescribe { device_ip: String },
-    CameraSnapshot { device_ip: String },
+    PlugStats { vendor, device_ip, creds },
+    PlugToggle { vendor, device_ip, state, creds },
+    CameraSnapshot { source, device_ip, model?, .. },
+    HueLights { .. }, NetatmoStations { .. }, RingAlarm { .. },
+    BridgeEvent { .. }, Weather { .. }, /* 18 total, see lib.rs */
 }
 
 pub fn dispatch(cmd: Command) -> Value;
