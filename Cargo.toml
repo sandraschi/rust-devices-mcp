@@ -17,3 +17,14 @@ todo = "deny"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+reqwest = { version = "0.12", features = ["json"] }
+chrono = "0.4"
+uuid = { version = "1", features = ["v5"] }
+oxvif = "0.17"
+nokhwa = { version = "0.10", features = ["input-msmf"] }
+image = "0.25"
+nokhwa-core = "0.1"
+tapo = "0.11"
+kasa-rs = "0.1"
+shelly-core = "0.2"

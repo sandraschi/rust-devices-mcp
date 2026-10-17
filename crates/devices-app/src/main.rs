@@ -1,32 +1,59 @@
-//! L3 desktop shell (Tauri v2 bridge shape, std-only in v0.1).
+//! L3 desktop shell (Tauri v2 bridge shape, std + tokio runtime in v0.2).
 //!
 //! Each `*_command` function is written exactly as a `#[tauri::command]`
-//! handler will call it: synchronous, in-process, straight into
-//! `devices-core::dispatch`. No child process, no local HTTP, no JSON-RPC hop.
-//! Wiring the real `tauri` crate + `tauri.conf.json` NSIS bundle is
-//! scorecard-tier-4; the function signatures below do not change when it lands.
+//! handler will call it: synchronous from the UI's point of view, in-process,
+//! straight into `devices-core::dispatch`. No child process, no local HTTP,
+//! no JSON-RPC hop. Wiring the real `tauri` crate + `tauri.conf.json` NSIS
+//! bundle is scorecard-tier-4; the function signatures below do not change
+//! when it lands.
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 
-use devices_core::{dispatch, Command};
+use devices_core::{creds::Vendor, dispatch, no_creds, Command};
 use serde_json::Value;
+use std::sync::OnceLock;
+use tokio::runtime::Runtime;
+
+fn rt() -> &'static Runtime {
+    static RT: OnceLock<Runtime> = OnceLock::new();
+    RT.get_or_init(|| match Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("failed to start async runtime: {e}");
+            std::process::exit(1);
+        }
+    })
+}
+
+fn run(cmd: Command) -> Value {
+    rt().block_on(dispatch(cmd))
+}
 
 /// Tauri command: `plug_get_stats` -- direct in-process call.
 fn plug_get_stats_command(device_ip: String) -> Value {
-    dispatch(Command::PlugStats { device_ip })
+    run(Command::PlugStats {
+        vendor: Vendor::Demo,
+        device_ip,
+        creds: no_creds(),
+    })
 }
 
 /// Tauri command: `plug_toggle` -- direct in-process call.
 fn plug_toggle_command(device_ip: String, state: bool) -> Value {
-    dispatch(Command::PlugToggle { device_ip, state })
+    run(Command::PlugToggle {
+        vendor: Vendor::Demo,
+        device_ip,
+        state,
+        creds: no_creds(),
+    })
 }
 
 /// Tauri command: `camera_describe` -- direct in-process call.
 fn camera_describe_command(device_ip: String) -> Value {
-    dispatch(Command::CameraDescribe { device_ip })
+    run(Command::CameraDescribe { device_ip })
 }
 
 fn main() {
@@ -58,9 +85,11 @@ mod tests {
     #[test]
     fn desktop_path_matches_mcp_dispatch() {
         let via_app = plug_toggle_command("192.168.1.50".to_string(), false);
-        let via_core = dispatch(Command::PlugToggle {
+        let via_core = run(Command::PlugToggle {
+            vendor: Vendor::Demo,
             device_ip: "192.168.1.50".to_string(),
             state: false,
+            creds: no_creds(),
         });
         assert_eq!(via_app, via_core);
     }

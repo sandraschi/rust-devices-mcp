@@ -8,6 +8,17 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
+tapo = { workspace = true }
+kasa-rs = { workspace = true }
+shelly-core = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+oxvif = { workspace = true }
+nokhwa = { workspace = true }
+image = { workspace = true }
+nokhwa-core = { workspace = true }
 
 [lints]
 workspace = true
