@@ -184,13 +184,25 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 |---|---|
 | Hue bridge 192.168.0.236 | ✅ 18 real lights (names, on/off, brightness, reachability) |
 | Ring Front Door | ✅ auth via cached token, doorbells + motion history, 640×360 snapshot |
+| Tapo plugs (.17 Aircon, .38 Server) | ✅ real readings (15.7 W idle, 290 W server) — incl. a fixed mW→W unit bug the hardware caught |
+| Tapo camera (.164) | ✅ native-protocol 640×360 JPEG |
+| Netatmo station | ✅ Stroheckgasse live (26.3 °C bedroom + modules) |
 | USB webcam (index 0+1) | ✅ real MJPEG frames, 640×480 parsed from SOF0 |
 | Public URL snapshot | ✅ httpbin JPEG 239×178 (devices-mcp's city-webcam URLs are 404 — config rot, not our bug) |
 | Demo vendor/source | ✅ deterministic oracle for CI |
-| Tapo plugs/cams, Kasa, Shelly, Netatmo, ONVIF | ⏳ code-complete + unit-tested, awaiting creds/hardware (no Tapo/Netatmo secrets or Kasa/Shelly devices in this shell) |
+| Kasa, Shelly, ONVIF-generic | ⏳ code-complete + unit-tested, no hardware on this LAN (Tapo ONVIF faults GetSnapshotUri on all profiles — firmware quirk, native path used instead) |
 
 Credential fence proven by design: every missing secret yields a typed Auth
 error naming the exact env var — verified live for ONVIF, Tapo, and Ring-expired paths.
+
+## Fleet import (zero-config on fleet machines)
+
+With operator permission, the app reads `devices-mcp`'s inventory at boot:
+plug IPs/names/readonly flags, Hue bridge + username, ONVIF/tapo camera hosts
+with **per-camera logins**, Ring token path, Netatmo triple, USB index — from
+`config.yaml`, `hue_bridge.cache`, and `.env` (explicit args > process env >
+`.env` > config). Secrets stay in memory, never in logs or errors. Pure CLI
+users set the env vars below instead.
 
 ## Credentials (explicit args win, env is the fallback, secrets never logged)
 

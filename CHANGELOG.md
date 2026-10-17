@@ -24,6 +24,18 @@
   per-doorbell pages, Raw), high-contrast theme + 16px base, field persistence
   (never passwords), `--smoke` headless CI. Tauri shell prototyped (4.64 MiB
   NSIS) then removed for the standard-mandated native stack.
+- Fleet import (`import.rs`, operator-permitted): IPs, per-camera logins,
+  Hue/Ring/Netatmo auth from the devices-mcp checkout; readonly-plug toggle
+  guard; per-device Tapo env names (`TAPO_P115_*`, `TAPO_LIGHTING_*`,
+  `TAPO_CAMERA_2_*`, `HUE_BRIDGE_USERNAME`).
+- Live-hardware fixes: Tapo energy `current_power` is milliwatts (crate docs
+  confirm; 290 kW readings were the tell), Ring refresh needs minimal body +
+  User-Agent, Tapo ONVIF faults GetSnapshotUri (native path used).
+- Hand-written NSIS installer (current-user, no admin): Start Menu +
+  Add/Remove Programs entries, ~17 MB bundle.
+- UI parity flow (`docs/UI_PARITY.md`): oracle screenshots → egui clone →
+  kittest golden snapshots + glyph-allowlist guard (egui 0.37 bundles only
+  Ubuntu-Light + egui-icons; status dots are painted, never glyphs).
 
 ## 2026-10-17 - v0.1.0 scaffold (ArtCraft pilot)
 

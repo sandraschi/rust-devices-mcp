@@ -9,7 +9,9 @@
 use devices_core::{
     camera::{self, CamSource},
     creds::{Credentials, Vendor},
-    dispatch, Command,
+    dispatch,
+    import::{self, FleetImport},
+    Command,
 };
 use eframe::egui;
 use serde_json::Value;
@@ -78,6 +80,7 @@ pub struct DevicesApp {
     tx: mpsc::Sender<Job>,
     rx: mpsc::Receiver<Job>,
     pending: usize,
+    fleet: Option<FleetImport>,
     page: Page,
     sidebar_open: bool,
     status_line: String,
@@ -148,7 +151,81 @@ fn harsh_visuals() -> egui::Visuals {
     visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
     visuals.selection.bg_fill = egui::Color32::from_rgb(36, 64, 107);
     visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    visuals.hyperlink_color = egui::Color32::from_rgb(125, 180, 255);
+    visuals.window_corner_radius = egui::CornerRadius::same(12);
+    visuals.menu_corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.noninteractive.corner_radius = egui::CornerRadius::same(6);
+    visuals.widgets.inactive.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
+    visuals.widgets.open.corner_radius = egui::CornerRadius::same(8);
     visuals
+}
+
+/// Brand accents per domain (mirrors the webapp's color language).
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(224, 108, 47);
+const ENERGY: egui::Color32 = egui::Color32::from_rgb(251, 191, 36);
+const HUE_YELLOW: egui::Color32 = egui::Color32::from_rgb(253, 224, 71);
+const SKY: egui::Color32 = egui::Color32::from_rgb(125, 211, 252);
+const VIOLET: egui::Color32 = egui::Color32::from_rgb(196, 181, 253);
+const RING_BLUE: egui::Color32 = egui::Color32::from_rgb(147, 197, 253);
+const GOOD: egui::Color32 = egui::Color32::from_rgb(110, 255, 150);
+const BAD: egui::Color32 = egui::Color32::from_rgb(255, 150, 150);
+
+/// Card container: lifted fill, 12px rounding, hairline stroke, soft shadow.
+fn card_frame(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame {
+        fill: egui::Color32::from_rgb(16, 26, 46),
+        corner_radius: egui::CornerRadius::same(12),
+        stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 52, 82)),
+        shadow: egui::Shadow {
+            offset: [0, 3],
+            blur: 14,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(110),
+        },
+        inner_margin: egui::Margin::same(14),
+        outer_margin: egui::Margin {
+            bottom: 10,
+            ..Default::default()
+        },
+    }
+    .show(ui, add_contents);
+}
+
+/// Primary action button (brand orange); danger variant for destructive acts.
+fn primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(text)
+                .strong()
+                .color(egui::Color32::WHITE),
+        )
+        .fill(ACCENT),
+    )
+}
+
+/// Hero KPI: big tinted number on a card. Dashboard row material.
+fn hero_kpi(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
+    card_frame(ui, |ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .size(13.0)
+                .color(egui::Color32::from_rgb(160, 175, 200)),
+        );
+        ui.label(egui::RichText::new(value).size(30.0).strong().color(color));
+    });
+}
+
+fn danger(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(text)
+                .strong()
+                .color(egui::Color32::WHITE),
+        )
+        .fill(egui::Color32::from_rgb(122, 45, 45)),
+    )
 }
 
 impl DevicesApp {
@@ -176,6 +253,7 @@ impl DevicesApp {
             tx,
             rx,
             pending: 0,
+            fleet: None,
             page: Page::Dashboard,
             sidebar_open: true,
             status_line: "starting…".to_string(),
@@ -212,6 +290,7 @@ impl DevicesApp {
             alarm_location: String::new(),
         };
         app.load_fields();
+        app.apply_fleet_import();
         // Dashboard paints real data immediately: no creds needed anywhere here.
         app.spawn_status();
         app.spawn_weather_boot();
@@ -405,14 +484,95 @@ impl DevicesApp {
         }
     }
 
+    /// Fleet import: IPs, usernames, and secrets from the devices-mcp
+    /// checkout (operator-permitted). Fills empty fields so the dashboard
+    /// works with zero typing on a fleet machine.
+    fn apply_fleet_import(&mut self) {
+        let Some(inv) = import::load() else {
+            return;
+        };
+        self.fleet = Some(inv.clone());
+        if self.plug_ip.trim().is_empty() {
+            if let Some(plug) = inv.plugs.first() {
+                self.plug_vendor = plug.vendor.to_string();
+                self.plug_ip = plug.ip.clone();
+            }
+        }
+        if let Some(hue) = &inv.hue {
+            if self.hue_ip.trim().is_empty() {
+                self.hue_ip = hue.ip.clone();
+            }
+            if self.hue_user.trim().is_empty() {
+                if let Some(user) = &hue.username {
+                    self.hue_user = user.clone();
+                }
+            }
+        }
+        if self.ring_token.trim().is_empty() {
+            if let Some(token) = &inv.ring_token_file {
+                self.ring_token = token.clone();
+            }
+        }
+        if self.cam_ip.trim().is_empty() {
+            if let Some(cam) = inv.onvif_cams.first() {
+                self.cam_source = "onvif".to_string();
+                self.cam_ip = cam.ip.clone();
+            }
+        }
+        if self.cam_user.trim().is_empty() {
+            if let Some(user) = &inv.tapo_cam_user {
+                self.cam_user = user.clone();
+            }
+        }
+        if let Some(idx) = inv.usb_index {
+            self.cam_index = idx.to_string();
+        }
+        self.note(format!(
+            "fleet import: {} plugs, {} onvif cams{}",
+            inv.plugs.len(),
+            inv.onvif_cams.len(),
+            if inv.netatmo_configured {
+                ", netatmo configured"
+            } else {
+                ""
+            }
+        ));
+    }
+
     fn plug_creds(&self) -> Result<(Vendor, Credentials), String> {
         let vendor = Vendor::parse(&self.plug_vendor).map_err(|e| e.to_string())?;
-        let creds = Credentials::resolve(
-            vendor,
-            Self::opt(&self.plug_user),
-            Self::opt(&self.plug_pass),
-        )
-        .map_err(|e| e.to_string())?;
+        // Tapo secrets fall back to the fleet store (process env, then
+        // devices-mcp/.env) so the dashboard needs no typing.
+        let mut user = Self::opt(&self.plug_user);
+        let mut pass = Self::opt(&self.plug_pass);
+        if vendor == Vendor::Tapo {
+            if user.is_none() {
+                user = import::fleet_secret_any(&[
+                    "TAPO_EMAIL",
+                    "TAPO_USERNAME",
+                    "TAPO_P115_EMAIL",
+                    "TAPO_LIGHTING_EMAIL",
+                ])
+                .or_else(|| {
+                    self.fleet
+                        .as_ref()
+                        .and_then(|fleet| fleet.tapo_email.clone())
+                });
+            }
+            if pass.is_none() {
+                pass = import::fleet_secret_any(&[
+                    "TAPO_PASSWORD",
+                    "TAPO_P115_PASSWORD",
+                    "TAPO_LIGHTING_PASSWORD",
+                ])
+                .or_else(|| {
+                    self.fleet
+                        .as_ref()
+                        .and_then(|fleet| fleet.tapo_password.clone())
+                });
+            }
+        }
+        let creds = Credentials::resolve(vendor, user, pass).map_err(|e| e.to_string())?;
         Ok((vendor, creds))
     }
 
@@ -437,6 +597,23 @@ impl DevicesApp {
                 });
             }
             (Ok((vendor, creds)), Some(on)) => {
+                let readonly = self
+                    .fleet
+                    .as_ref()
+                    .map(|fleet| {
+                        fleet
+                            .plugs
+                            .iter()
+                            .any(|plug| plug.ip == ip && plug.readonly)
+                    })
+                    .unwrap_or(false);
+                if readonly {
+                    let message =
+                        format!("{ip} is marked readonly in the fleet config — toggle refused");
+                    self.note(message.clone());
+                    self.raw = serde_json::json!({"error": message}).to_string();
+                    return;
+                }
                 self.note(format!("toggling {} plug @ {ip}…", vendor.as_str()));
                 self.spawn(move || async move {
                     Job::Plug(
@@ -549,11 +726,39 @@ impl DevicesApp {
     }
 
     fn spawn_ring(&mut self, doorbells: bool) {
-        let (email, pass, token) = (
+        let mut triple = (
             Self::opt(&self.ring_email),
             Self::opt(&self.ring_pass),
             Self::opt(&self.ring_token),
         );
+        if triple.0.is_none() {
+            triple.0 = import::fleet_secret("RING_EMAIL");
+        }
+        if triple.1.is_none() {
+            triple.1 = import::fleet_secret("RING_PASSWORD");
+        }
+        if triple.2.is_none() {
+            triple.2 = import::fleet_secret("RING_TOKEN_FILE");
+        }
+        if triple.0.is_none() {
+            triple.0 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_email.clone());
+        }
+        if triple.1.is_none() {
+            triple.1 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_password.clone());
+        }
+        if triple.2.is_none() {
+            triple.2 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_token_file.clone());
+        }
+        let (email, pass, token) = triple;
         self.note(if doorbells {
             "listing Ring doorbells…"
         } else {
@@ -580,11 +785,39 @@ impl DevicesApp {
     }
 
     fn spawn_alarm_read(&mut self) {
-        let (email, pass, token) = (
+        let mut triple = (
             Self::opt(&self.ring_email),
             Self::opt(&self.ring_pass),
             Self::opt(&self.ring_token),
         );
+        if triple.0.is_none() {
+            triple.0 = import::fleet_secret("RING_EMAIL");
+        }
+        if triple.1.is_none() {
+            triple.1 = import::fleet_secret("RING_PASSWORD");
+        }
+        if triple.2.is_none() {
+            triple.2 = import::fleet_secret("RING_TOKEN_FILE");
+        }
+        if triple.0.is_none() {
+            triple.0 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_email.clone());
+        }
+        if triple.1.is_none() {
+            triple.1 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_password.clone());
+        }
+        if triple.2.is_none() {
+            triple.2 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_token_file.clone());
+        }
+        let (email, pass, token) = triple;
         self.note("reading alarm state…");
         self.spawn(move || async move {
             Job::Ring(
@@ -603,11 +836,39 @@ impl DevicesApp {
     fn spawn_alarm_set(&mut self) {
         let mode = self.alarm_mode.clone();
         let location = Self::opt(&self.alarm_location);
-        let (email, pass, token) = (
+        let mut triple = (
             Self::opt(&self.ring_email),
             Self::opt(&self.ring_pass),
             Self::opt(&self.ring_token),
         );
+        if triple.0.is_none() {
+            triple.0 = import::fleet_secret("RING_EMAIL");
+        }
+        if triple.1.is_none() {
+            triple.1 = import::fleet_secret("RING_PASSWORD");
+        }
+        if triple.2.is_none() {
+            triple.2 = import::fleet_secret("RING_TOKEN_FILE");
+        }
+        if triple.0.is_none() {
+            triple.0 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_email.clone());
+        }
+        if triple.1.is_none() {
+            triple.1 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_password.clone());
+        }
+        if triple.2.is_none() {
+            triple.2 = self
+                .fleet
+                .as_ref()
+                .and_then(|fleet| fleet.ring_token_file.clone());
+        }
+        let (email, pass, token) = triple;
         self.note(format!("setting alarm mode {mode}…"));
         self.spawn(move || async move {
             Job::Ring(
@@ -676,12 +937,15 @@ fn value_rows(ui: &mut egui::Ui, value: &Value) {
 }
 
 fn on_pill(ui: &mut egui::Ui, on: bool) {
-    let (text, color) = if on {
-        ("● ON", egui::Color32::from_rgb(110, 255, 150))
-    } else {
-        ("○ OFF", egui::Color32::from_rgb(255, 150, 150))
-    };
-    ui.colored_label(color, egui::RichText::new(text).strong());
+    // Status dots are painted circles, not glyphs: geometric codepoints
+    // (● U+25CF et al.) have no glyph in egui 0.37's bundled fonts and
+    // render as tofu. See the glyph_allowlist test below.
+    ui.horizontal(|ui| {
+        let (color, text) = if on { (GOOD, "ON") } else { (BAD, "OFF") };
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), 6.0, color);
+        ui.label(egui::RichText::new(text).strong().color(color));
+    });
 }
 
 impl eframe::App for DevicesApp {
@@ -691,8 +955,12 @@ impl eframe::App for DevicesApp {
 
         egui::Panel::top("topbar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                let glyph = if self.sidebar_open { "⏷" } else { "⏵" };
-                if ui.button(format!("{glyph} Menu")).clicked() {
+                let menu_label = if self.sidebar_open {
+                    "- Menu"
+                } else {
+                    "+ Menu"
+                };
+                if ui.button(menu_label).clicked() {
                     self.sidebar_open = !self.sidebar_open;
                 }
                 ui.heading("Devices (Rust)");
@@ -730,7 +998,7 @@ impl eframe::App for DevicesApp {
                         if ui
                             .selectable_label(
                                 self.page == Page::LightDetail(id.clone()),
-                                format!("💡 {name}"),
+                                name.clone(),
                             )
                             .clicked()
                         {
@@ -754,7 +1022,7 @@ impl eframe::App for DevicesApp {
                             && ui
                                 .selectable_label(
                                     self.page == Page::DoorbellDetail(id),
-                                    format!("🔔 {name}"),
+                                    name.clone(),
                                 )
                                 .clicked()
                         {
@@ -801,27 +1069,50 @@ impl DevicesApp {
         ui.heading("Dashboard");
         ui.label("Every button below calls the same command bus as the CLI and MCP server.");
         ui.horizontal(|ui| {
-            if ui.button("⟳ Plugs").clicked() {
+            if ui.button("Plugs").clicked() {
                 self.page = Page::Energy;
             }
-            if ui.button("⟳ Lighting").clicked() {
+            if ui.button("Lighting").clicked() {
                 self.page = Page::Lighting;
             }
-            if ui.button("⟳ Cameras").clicked() {
+            if ui.button("Cameras").clicked() {
                 self.page = Page::Cameras;
             }
-            if ui.button("⟳ Alarms").clicked() {
+            if ui.button("Alarms").clicked() {
                 self.page = Page::Alarms;
             }
         });
         ui.separator();
+        {
+            let wx_temp = self
+                .wx_card
+                .as_ref()
+                .and_then(|card| card.get("current"))
+                .and_then(|current| current.get("temperature_2m"))
+                .and_then(|temp| temp.as_f64())
+                .map(|temp| format!("{temp:.1} °C"))
+                .unwrap_or_else(|| "—".to_string());
+            let hue_total = self.lights.len();
+            let hue_on = self
+                .lights
+                .iter()
+                .filter(|lamp| lamp.get("on").and_then(|v| v.as_bool()).unwrap_or(false))
+                .count();
+            ui.horizontal(|ui| {
+                hero_kpi(ui, "Temperature", &wx_temp, SKY);
+                hero_kpi(ui, "Hue on", &format!("{hue_on}/{hue_total}"), HUE_YELLOW);
+                hero_kpi(ui, "Snapshots", &self.shots.len().to_string(), VIOLET);
+                hero_kpi(ui, "Jobs", &self.pending.to_string(), ACCENT);
+            });
+        }
+        ui.separator();
         if let Some(card) = self.wx_card.clone() {
-            ui.group(|ui| {
+            card_frame(ui, |ui| {
                 ui.heading("Weather now");
                 value_rows(ui, &card);
             });
         }
-        ui.group(|ui| {
+        card_frame(ui, |ui| {
             ui.heading("Fleet at a glance");
             ui.label(format!("Hue lights seen: {}", self.lights.len()));
             ui.label(format!(
@@ -833,29 +1124,30 @@ impl DevicesApp {
     }
 
     fn page_energy(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Energy — smart plugs");
+        ui.heading(
+            egui::RichText::new("Energy — smart plugs")
+                .color(ENERGY)
+                .strong(),
+        );
         combo(ui, "Vendor", &mut self.plug_vendor, VENDORS);
         field(ui, "Device IP", &mut self.plug_ip, false, "192.168.0.17");
         field(ui, "Username", &mut self.plug_user, false, "env fallback");
         field(ui, "Password", &mut self.plug_pass, true, "env fallback");
         ui.horizontal(|ui| {
-            if ui.button("Get stats").clicked() {
+            if primary(ui, "Get stats").clicked() {
                 self.spawn_plug(None);
             }
             if ui.button("Turn ON").clicked() {
                 self.spawn_plug(Some(true));
             }
-            if ui
-                .add(egui::Button::new("Turn OFF").fill(egui::Color32::from_rgb(122, 45, 45)))
-                .clicked()
-            {
+            if danger(ui, "Turn OFF").clicked() {
                 self.spawn_plug(Some(false));
             }
         });
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for card in self.plug_cards.clone() {
-                ui.group(|ui| {
+                card_frame(ui, |ui| {
                     if let (Some(ip), Some(vendor)) = (
                         card.get("device_ip").and_then(|v| v.as_str()),
                         card.get("vendor").and_then(|v| v.as_str()),
@@ -873,7 +1165,7 @@ impl DevicesApp {
         field(ui, "Bridge IP", &mut self.hue_ip, false, "192.168.0.236");
         field(ui, "Username", &mut self.hue_user, false, "HUE_USERNAME");
         ui.horizontal(|ui| {
-            if ui.button("List lights").clicked() {
+            if primary(ui, "List lights").clicked() {
                 self.spawn_hue_lights();
             }
         });
@@ -883,7 +1175,7 @@ impl DevicesApp {
             for lamp in &lights {
                 let id = lamp.get("id").and_then(|v| v.as_str()).unwrap_or("?");
                 let name = lamp.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                ui.group(|ui| {
+                card_frame(ui, |ui| {
                     ui.horizontal(|ui| {
                         if ui.link(name).clicked() {
                             self.page = Page::LightDetail(id.to_string());
@@ -941,8 +1233,8 @@ impl DevicesApp {
         match lamp {
             Some(lamp) => {
                 let name = lamp.get("name").and_then(|v| v.as_str()).unwrap_or(id);
-                ui.heading(format!("💡 {name}"));
-                ui.group(|ui| value_rows(ui, &lamp));
+                ui.heading(egui::RichText::new(name).color(HUE_YELLOW).strong());
+                card_frame(ui, |ui| value_rows(ui, &lamp));
                 ui.separator();
                 self.light_controls(ui, id);
             }
@@ -959,7 +1251,7 @@ impl DevicesApp {
 
     fn page_climate(&mut self, ui: &mut egui::Ui) {
         ui.heading("Climate");
-        ui.group(|ui| {
+        card_frame(ui, |ui| {
             ui.label("Not ported yet. Midea / Mitsubishi drivers live in the Python app;");
             ui.label("this page lands with the climate tier (one Command variant each).");
         });
@@ -969,19 +1261,61 @@ impl DevicesApp {
         ui.heading("Weather (Open-Meteo, keyless — Vienna default)");
         field(ui, "Lat", &mut self.wx_lat, false, "48.2082");
         field(ui, "Lon", &mut self.wx_lon, false, "16.3738");
-        if ui.button("Refresh").clicked() {
+        if primary(ui, "Refresh").clicked() {
             let lat = self.wx_lat.trim().parse().ok();
             let lon = self.wx_lon.trim().parse().ok();
             self.spawn_weather_latlon(lat, lon);
         }
+        if ui.button("Load Netatmo station").clicked() {
+            self.spawn_netatmo();
+        }
         ui.separator();
         if let Some(card) = self.wx_card.clone() {
-            ui.group(|ui| {
+            card_frame(ui, |ui| {
                 if let Some(summary) = card.get("summary").and_then(|v| v.as_str()) {
                     ui.heading(summary);
                 }
                 value_rows(ui, &card);
             });
+        }
+    }
+
+    fn spawn_netatmo(&mut self) {
+        let fleet = self.fleet.clone();
+        self.note("loading Netatmo station…");
+        self.spawn(move || async move {
+            let (id, secret, refresh) = match &fleet {
+                Some(fleet) => (
+                    fleet.netatmo_client_id.clone(),
+                    fleet.netatmo_client_secret.clone(),
+                    fleet.netatmo_refresh_token.clone(),
+                ),
+                None => (None, None, None),
+            };
+            Job::Weather(
+                dispatch(Command::NetatmoStations {
+                    client_id: id,
+                    client_secret: secret,
+                    refresh_token: refresh,
+                })
+                .await,
+            )
+        });
+    }
+
+    /// Per-camera login from the fleet import, matched by IP with first-cam
+    /// fallback. Secrets stay in memory; callers never log them.
+    fn cam_auth_for(&self, ip: &str) -> (Option<String>, Option<String>) {
+        let picked = self.fleet.as_ref().and_then(|fleet| {
+            fleet
+                .cam_auth
+                .iter()
+                .find(|auth| auth.ip == ip)
+                .or_else(|| fleet.cam_auth.first())
+        });
+        match picked {
+            Some(auth) => (auth.username.clone(), auth.password.clone()),
+            None => (None, None),
         }
     }
 
@@ -1007,7 +1341,7 @@ impl DevicesApp {
         field(ui, "Username", &mut self.cam_user, false, "");
         field(ui, "Password", &mut self.cam_pass, true, "");
         field(ui, "USB index", &mut self.cam_index, false, "0");
-        if ui.button("Snapshot").clicked() {
+        if primary(ui, "Snapshot").clicked() {
             let source = match CamSource::parse(&self.cam_source) {
                 Ok(source) => source,
                 Err(e) => {
@@ -1018,13 +1352,30 @@ impl DevicesApp {
             };
             let device_index = self.cam_index.trim().parse().ok();
             let label = format!("{} {}", source.as_str(), self.cam_ip.trim());
+            let mut user = Self::opt(&self.cam_user);
+            let mut pass = Self::opt(&self.cam_pass);
+            if user.is_none() {
+                user = import::fleet_secret_any(&["CAMERA_USERNAME", "TAPO_CAMERA_USERNAME"]);
+            }
+            if pass.is_none() {
+                pass = import::fleet_secret_any(&["CAMERA_PASSWORD", "TAPO_CAMERA_PASSWORD"]);
+            }
+            if user.is_none() || pass.is_none() {
+                let (fleet_user, fleet_pass) = self.cam_auth_for(self.cam_ip.trim());
+                if user.is_none() {
+                    user = fleet_user;
+                }
+                if pass.is_none() {
+                    pass = fleet_pass;
+                }
+            }
             self.spawn_snapshot(
                 label,
                 source,
                 self.cam_ip.trim().to_string(),
                 Self::opt(&self.cam_model),
-                Self::opt(&self.cam_user),
-                Self::opt(&self.cam_pass),
+                user,
+                pass,
                 None,
                 device_index,
                 Self::opt(&self.cam_url),
@@ -1034,7 +1385,7 @@ impl DevicesApp {
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for shot in &self.shots {
-                ui.group(|ui| {
+                card_frame(ui, |ui| {
                     ui.heading(&shot.label);
                     value_rows(ui, &shot.meta);
                     if let Some(tex) = &shot.texture {
@@ -1083,7 +1434,7 @@ impl DevicesApp {
             }
         });
         ui.separator();
-        if ui.button("Doorbell snapshot → Cameras").clicked() {
+        if ui.button("Doorbell snapshot (see Cameras)").clicked() {
             let id = self.ring_id.trim().to_string();
             let label = format!("ring {id}");
             let (email, pass, token) = (
@@ -1107,7 +1458,7 @@ impl DevicesApp {
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for location in self.ring_locations.clone() {
-                ui.group(|ui| {
+                card_frame(ui, |ui| {
                     ui.heading("Alarm location");
                     value_rows(ui, &location);
                 });
@@ -1127,8 +1478,12 @@ impl DevicesApp {
                     .get("name")
                     .and_then(|v| v.as_str())
                     .unwrap_or("doorbell");
-                ui.heading(format!("🔔 {name} (id {id})"));
-                ui.group(|ui| value_rows(ui, &bell));
+                ui.heading(
+                    egui::RichText::new(format!("{name} (id {id})"))
+                        .color(RING_BLUE)
+                        .strong(),
+                );
+                card_frame(ui, |ui| value_rows(ui, &bell));
                 ui.separator();
                 if ui.button("Snapshot now").clicked() {
                     let (email, pass, token) = (
@@ -1201,5 +1556,64 @@ pub fn smoke() -> eframe::Result<()> {
     } else {
         eprintln!("smoke: parity check failed");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+    use egui_kittest::Harness;
+
+    /// Component snapshots guard the converged look (see docs/UI_PARITY.md).
+    /// A failing snapshot means the look changed: inspect the PNG, then fix
+    /// the code or bless the new gold.
+    /// Glyph allowlist guard: egui 0.37 bundles only Ubuntu-Light +
+    /// egui-icons, so geometric/symbolic glyphs (verified missing: check,
+    /// play, diamond, triangles, star, warning, circles, arrow) render as
+    /// tofu. This test renders every non-ASCII glyph the UI uses and fails
+    /// loudly if anyone adds an uncovered one. Verified set: ° × · … —.
+    /// Status dots are painted circles (see on_pill), never glyphs.
+    #[test]
+    fn glyph_allowlist() {
+        let mut harness = Harness::new_ui(|ui| {
+            ui.label("18.7 °C · 42.5 × 2 — querying…");
+        });
+        harness.run();
+    }
+
+    #[test]
+    fn hero_kpi_card() {
+        let mut harness = Harness::new_ui(|ui| {
+            hero_kpi(ui, "Temperature", "18.7 °C", SKY);
+        });
+        harness.snapshot("hero_kpi");
+    }
+
+    #[test]
+    fn on_off_pills() {
+        let mut harness = Harness::new_ui(|ui| {
+            on_pill(ui, true);
+            on_pill(ui, false);
+        });
+        harness.snapshot("pills");
+    }
+
+    #[test]
+    fn value_card_with_error() {
+        let mut harness = Harness::new_ui(|ui| {
+            card_frame(ui, |ui| {
+                value_rows(
+                    ui,
+                    &serde_json::json!({"error": "auth failed: set HUE_USERNAME"}),
+                );
+            });
+            card_frame(ui, |ui| {
+                value_rows(
+                    ui,
+                    &serde_json::json!({"device_ip": "192.168.0.17", "is_on": true}),
+                );
+            });
+        });
+        harness.snapshot("value_cards");
     }
 }
