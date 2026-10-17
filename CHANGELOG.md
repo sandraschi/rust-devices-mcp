@@ -53,6 +53,13 @@
   User-Agent, Tapo ONVIF faults GetSnapshotUri (native path used).
 - Hand-written NSIS installer (current-user, no admin): Start Menu +
   Add/Remove Programs entries, ~17 MB bundle.
+- Fixes from live use: `${VAR:-default}` expansion in fleet import (config
+  hosts arrived unexpanded and prefills broke — regression-tested), visible
+  dark-mode card borders (black shadows are physically invisible; borders
+  carry separation), curated weather card (hourly arrays flooded the old
+  one), spinning GPU icosahedron on the dashboard (12 verts, 20 faces, zero
+  new crates, projection unit-tested), ONVIF multi-profile snapshot attempts
+  (Tapo firmware faults all profiles — documented quirk, native path used).
 - UI parity flow (`docs/UI_PARITY.md`): oracle screenshots → egui clone →
   kittest golden snapshots + glyph-allowlist guard (egui 0.37 bundles only
   Ubuntu-Light + egui-icons; status dots are painted, never glyphs).

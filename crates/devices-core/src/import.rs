@@ -137,18 +137,33 @@ pub fn fleet_secret_any(names: &[&str]) -> Option<String> {
     names.iter().filter_map(|name| fleet_secret(name)).next()
 }
 
-/// Expand `${VAR}` / `$VAR` config references through the secret chain;
-/// plain values pass through untouched.
+/// Expand `${VAR}`, `${VAR:-default}`, `${VAR-default}` and `$VAR`
+/// config references through the secret chain; plain values pass through
+/// untouched. The `:-` form is what fleet configs actually use
+/// (`host: ${TAPO_CAMERA_HOST:-192.168.0.164}`) — missing it prefills the
+/// literal string as an IP (caught live 2026-10-17).
 fn expand_env(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if let Some(name) = trimmed
+    if let Some(inner) = trimmed
         .strip_prefix("${")
         .and_then(|rest| rest.strip_suffix('}'))
     {
-        return fleet_secret(name);
+        let (name, default) = if let Some((name, fallback)) = inner.split_once(":-") {
+            (name, Some(fallback))
+        } else if let Some((name, fallback)) = inner.split_once('-') {
+            (name, Some(fallback))
+        } else {
+            (inner, None)
+        };
+        if let Some(hit) = fleet_secret(name.trim()) {
+            return Some(hit);
+        }
+        return default
+            .map(|fallback| fallback.trim().to_string())
+            .filter(|fallback| !fallback.is_empty());
     }
     if let Some(name) = trimmed.strip_prefix('$') {
         if !name.is_empty() && !name.contains(char::is_whitespace) {
@@ -200,7 +215,7 @@ pub fn load() -> Option<FleetImport> {
                 .and_then(|g| g.get("devices"));
             if let Some(list) = devices.and_then(|v| v.as_sequence()) {
                 for plug in list {
-                    if let Some(host) = yaml_str(plug, "host") {
+                    if let Some(host) = yaml_secret(plug, "host") {
                         plugs.push(PlugEntry {
                             vendor: "tapo",
                             label: yaml_str(plug, "name").unwrap_or_else(|| host.clone()),
@@ -222,10 +237,10 @@ pub fn load() -> Option<FleetImport> {
     // lighting.philips_hue {bridge_ip, username}.
     let hue = yaml.get("lighting").and_then(|lighting| {
         lighting.get("philips_hue").and_then(|bridge| {
-            if !yaml_bool(bridge, "enabled") && yaml_str(bridge, "bridge_ip").is_none() {
+            if !yaml_bool(bridge, "enabled") && yaml_secret(bridge, "bridge_ip").is_none() {
                 return None;
             }
-            let ip = yaml_str(bridge, "bridge_ip")?;
+            let ip = yaml_secret(bridge, "bridge_ip")?;
             let mut username = yaml_secret(bridge, "username");
             if username.is_none() {
                 if let Ok(cache) = std::fs::read_to_string(base.join("hue_bridge.cache")) {
@@ -253,7 +268,7 @@ pub fn load() -> Option<FleetImport> {
                 continue;
             }
             if let Some(params) = cam.get("params") {
-                if let Some(host) = yaml_str(params, "host") {
+                if let Some(host) = yaml_secret(params, "host") {
                     let user = yaml_secret(params, "username");
                     let pass = yaml_secret(params, "password");
                     if tapo_cam_user.is_none() {
@@ -385,6 +400,14 @@ mod tests {
             Some("192.168.0.17".to_string())
         );
         assert_eq!(expand_env("   "), None);
+        // ${VAR:-default} falls back when the var is absent (fleet configs
+        // use this form for hosts — regression test for the unexpanded-IP
+        // bug that prefills "${TAPO_CAMERA_HOST:-192.168.0.164}" literally).
+        assert_eq!(
+            expand_env("${RUST_DEVICES_MCP_DEFINITELY_UNSET:-192.168.0.164}"),
+            Some("192.168.0.164".to_string())
+        );
+        assert_eq!(expand_env("${RUST_DEVICES_MCP_DEFINITELY_UNSET}"), None);
         // ${VAR} resolution depends on machine env; only the shape is asserted.
         let _ = expand_env("${TAPO_EMAIL}");
     }

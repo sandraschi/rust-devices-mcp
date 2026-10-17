@@ -305,10 +305,13 @@ fn accent_card_frame(
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
     let dark = ui.visuals().dark_mode;
+    // Dark cards need presence, not shadows: black-on-black shadows are
+    // physically invisible, so the border carries the separation (caught as
+    // "invisible in dark mode", 2026-10-17 — light mode was always fine).
     let (fill, stroke) = if dark {
         (
-            egui::Color32::from_rgb(16, 26, 46),
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 52, 82)),
+            egui::Color32::from_rgb(22, 34, 60),
+            egui::Stroke::new(1.5, egui::Color32::from_rgb(74, 102, 152)),
         )
     } else {
         (
@@ -364,6 +367,164 @@ fn hero_kpi(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
         };
         ui.label(egui::RichText::new(label).size(13.0).color(dim));
         ui.label(egui::RichText::new(value).size(30.0).strong().color(color));
+    });
+}
+
+/// Spinning icosahedron: 12 vertices, 20 faces, zero crates beyond egui.
+/// Pure projection math (unit-tested below); the widget only paints.
+/// Edges dedupe from faces at paint time — 60 pairs, trivially cheap.
+fn ico_point(vertex: [f32; 3], angle_y: f32, tilt_x: f32) -> (f32, f32, f32) {
+    let (sin_y, cos_y) = angle_y.sin_cos();
+    let (sin_x, cos_x) = tilt_x.sin_cos();
+    let (x, y, z) = (vertex[0], vertex[1], vertex[2]);
+    let (x, z) = (x * cos_y + z * sin_y, -x * sin_y + z * cos_y);
+    let (y, z) = (y * cos_x - z * sin_x, y * sin_x + z * cos_x);
+    (x, y, z)
+}
+
+fn ico_vertices() -> [[f32; 3]; 12] {
+    let t = std::f32::consts::GOLDEN_RATIO;
+    [
+        [-1.0, t, 0.0],
+        [1.0, t, 0.0],
+        [-1.0, -t, 0.0],
+        [1.0, -t, 0.0],
+        [0.0, -1.0, t],
+        [0.0, 1.0, t],
+        [0.0, -1.0, -t],
+        [0.0, 1.0, -t],
+        [t, 0.0, -1.0],
+        [t, 0.0, 1.0],
+        [-t, 0.0, -1.0],
+        [-t, 0.0, 1.0],
+    ]
+}
+
+fn ico_faces() -> [[usize; 3]; 20] {
+    [
+        [0, 11, 5],
+        [0, 5, 1],
+        [0, 1, 7],
+        [0, 7, 10],
+        [0, 10, 11],
+        [1, 5, 9],
+        [5, 11, 4],
+        [11, 10, 2],
+        [10, 7, 6],
+        [7, 1, 8],
+        [3, 9, 4],
+        [3, 4, 2],
+        [3, 2, 6],
+        [3, 6, 8],
+        [3, 8, 9],
+        [4, 9, 5],
+        [2, 4, 11],
+        [6, 2, 10],
+        [8, 6, 7],
+        [9, 8, 1],
+    ]
+}
+
+fn icosahedron(ui: &mut egui::Ui) {
+    let ctx = ui.ctx().clone();
+    accent_card_frame(ui, Some(VIOLET), |ui| {
+        ui.label(egui::RichText::new("GPU immediate mode").strong());
+        ui.label("12 vertices, 20 faces, 0 crates beyond egui.");
+        let size = egui::vec2(ui.available_width().max(200.0), 220.0);
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        let time = ctx.time() as f32;
+        let verts = ico_vertices();
+        let projected: Vec<(f32, f32, f32)> = verts
+            .iter()
+            .map(|v| ico_point(*v, time * 0.5, 0.35 + (time * 0.13).sin() * 0.15))
+            .collect();
+        let to_screen = |x: f32, y: f32, z: f32| {
+            let perspective = 3.4 / (3.4 + z);
+            egui::pos2(
+                rect.center().x + x * perspective * 62.0,
+                rect.center().y - y * perspective * 62.0,
+            )
+        };
+        let mut edges = std::collections::HashSet::new();
+        for face in ico_faces() {
+            for side in 0..3 {
+                let (a, b) = (face[side], face[(side + 1) % 3]);
+                edges.insert((a.min(b), a.max(b)));
+            }
+        }
+        for (a, b) in &edges {
+            let (pa, pb) = (projected[*a], projected[*b]);
+            let front = (pa.2 + pb.2) / 2.0 > 0.0;
+            let color = if front {
+                egui::Color32::from_rgb(196, 181, 253)
+            } else {
+                egui::Color32::from_rgb(90, 100, 140)
+            };
+            painter.line_segment(
+                [to_screen(pa.0, pa.1, pa.2), to_screen(pb.0, pb.1, pb.2)],
+                egui::Stroke::new(1.6, color),
+            );
+        }
+        for (x, y, z) in &projected {
+            painter.circle_filled(
+                to_screen(*x, *y, *z),
+                3.0,
+                egui::Color32::from_rgb(240, 244, 252),
+            );
+        }
+    });
+    ctx.request_repaint();
+}
+
+/// Curated weather card: big temperature, summary, and the six numbers
+/// that matter — never the raw payload dump (hourly arrays flooded it).
+fn weather_card(ui: &mut egui::Ui, card: &Value) {
+    let current = card.get("current");
+    let num = |key: &str| current.and_then(|c| c.get(key)).and_then(|v| v.as_f64());
+    let summary = card
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Weather");
+    let today = card.get("today");
+    let day = |key: &str| {
+        today
+            .and_then(|t| t.get(key))
+            .and_then(|v| v.as_f64())
+            .map(|v| format!("{v:.0}"))
+            .unwrap_or_else(|| "—".to_string())
+    };
+    accent_card_frame(ui, Some(SKY), |ui| {
+        ui.horizontal(|ui| {
+            let temp = num("temperature_2m")
+                .map(|t| format!("{t:.1} °C"))
+                .unwrap_or_else(|| "—".to_string());
+            ui.label(egui::RichText::new(temp).size(38.0).strong().color(SKY));
+            ui.vertical(|ui| {
+                ui.heading(summary);
+                if let Some(feels) = num("apparent_temperature") {
+                    ui.label(format!("feels {feels:.1} °C"));
+                }
+                if let Some(humidity) = num("relative_humidity_2m") {
+                    ui.label(format!("humidity {humidity:.0} %"));
+                }
+                if let Some(wind) = num("wind_speed_10m") {
+                    ui.label(format!("wind {wind:.0} km/h"));
+                }
+            });
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(format!("today {} … {} °C", day("min_c"), day("max_c")));
+            ui.label(format!(
+                "rain {}%",
+                today
+                    .and_then(|t| t.get("precipitation_probability_max"))
+                    .and_then(|v| v.as_f64())
+                    .map(|v| format!("{v:.0}"))
+                    .unwrap_or_else(|| "—".to_string())
+            ));
+        });
     });
 }
 
@@ -1358,19 +1519,19 @@ impl DevicesApp {
         }
         ui.separator();
         if let Some(card) = self.wx_card.clone() {
-            card_frame(ui, |ui| {
-                ui.heading("Weather now");
-                value_rows(ui, &card);
-            });
+            weather_card(ui, &card);
         }
-        card_frame(ui, |ui| {
-            ui.heading("Fleet at a glance");
-            ui.label(format!("Hue lights seen: {}", self.lights.len()));
-            ui.label(format!(
-                "Ring doorbells seen: {}",
-                self.ring_doorbells.len()
-            ));
-            ui.label(format!("Snapshots this session: {}", self.shots.len()));
+        ui.horizontal(|ui| {
+            icosahedron(ui);
+            card_frame(ui, |ui| {
+                ui.heading("Fleet at a glance");
+                ui.label(format!("Hue lights seen: {}", self.lights.len()));
+                ui.label(format!(
+                    "Ring doorbells seen: {}",
+                    self.ring_doorbells.len()
+                ));
+                ui.label(format!("Snapshots this session: {}", self.shots.len()));
+            });
         });
     }
 
@@ -1526,12 +1687,7 @@ impl DevicesApp {
         }
         ui.separator();
         if let Some(card) = self.wx_card.clone() {
-            card_frame(ui, |ui| {
-                if let Some(summary) = card.get("summary").and_then(|v| v.as_str()) {
-                    ui.heading(summary);
-                }
-                value_rows(ui, &card);
-            });
+            weather_card(ui, &card);
         }
         if let Some(samples) = self.wx_hourly() {
             spark_chart(ui, "Next 24h temperature", "°C", &samples, SKY);
@@ -1857,6 +2013,16 @@ mod parity_tests {
             ui.label("18.7 °C · 42.5 × 2 — querying…");
         });
         harness.run();
+    }
+
+    #[test]
+    fn ico_projection_is_identity_at_rest() {
+        // Zero rotation changes nothing; lengths are preserved by construction.
+        let (x, y, z) = ico_point([1.0, 2.0, 3.0], 0.0, 0.0);
+        assert!((x - 1.0).abs() < 1e-6 && (y - 2.0).abs() < 1e-6 && (z - 3.0).abs() < 1e-6);
+        // 20 faces, 12 unique vertices — the icosahedron census.
+        assert_eq!(ico_faces().len(), 20);
+        assert_eq!(ico_vertices().len(), 12);
     }
 
     /// Self-scan: the render test above only covers what it renders — this
