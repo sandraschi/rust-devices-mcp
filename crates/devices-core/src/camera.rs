@@ -193,8 +193,15 @@ pub fn save_snapshot(bytes: &[u8], out_path: &str) -> Result<String, DeviceError
     Ok(path.to_string())
 }
 
+/// A grabbed frame: metadata for agents, bytes for presenters (base64 in
+/// the Tauri layer, files on disk — never blobs over MCP).
+pub struct Frame {
+    pub meta: Snapshot,
+    pub jpeg: Vec<u8>,
+}
+
 #[allow(clippy::too_many_arguments)]
-pub async fn snapshot(
+pub async fn snapshot_full(
     source: CamSource,
     device_ip: &str,
     model: Option<String>,
@@ -206,7 +213,7 @@ pub async fn snapshot(
     out_path: Option<String>,
     ring_email: Option<String>,
     ring_token_file: Option<String>,
-) -> Result<Snapshot, DeviceError> {
+) -> Result<Frame, DeviceError> {
     let bytes = match source {
         CamSource::Demo => {
             // Deterministic minimal JPEG (SOI + SOF0 4x2 + EOI) so probes and
@@ -302,13 +309,47 @@ pub async fn snapshot(
         Some(p) => Some(save_snapshot(&bytes, &p)?),
         None => None,
     };
-    Ok(Snapshot {
-        source: source.as_str().to_string(),
-        bytes: bytes.len() as u64,
-        width,
-        height,
-        path,
+    Ok(Frame {
+        meta: Snapshot {
+            source: source.as_str().to_string(),
+            bytes: bytes.len() as u64,
+            width,
+            height,
+            path,
+        },
+        jpeg: bytes,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn snapshot(
+    source: CamSource,
+    device_ip: &str,
+    model: Option<String>,
+    username: Option<String>,
+    password: Option<String>,
+    onvif_port: Option<u16>,
+    device_index: Option<u32>,
+    url: Option<String>,
+    out_path: Option<String>,
+    ring_email: Option<String>,
+    ring_token_file: Option<String>,
+) -> Result<Snapshot, DeviceError> {
+    snapshot_full(
+        source,
+        device_ip,
+        model,
+        username,
+        password,
+        onvif_port,
+        device_index,
+        url,
+        out_path,
+        ring_email,
+        ring_token_file,
+    )
+    .await
+    .map(|frame| frame.meta)
 }
 
 /// Minimal valid JPEG: SOI, SOF0 (4x2), EOI. Exercises parse + write paths.

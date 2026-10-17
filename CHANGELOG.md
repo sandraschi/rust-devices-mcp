@@ -1,6 +1,6 @@
 # Changelog - rust-devices-mcp
 
-## Unreleased - v0.2.0-dev (real drivers, tier-2 + tier-3)
+## v0.2.0 (2026-10-17) - real drivers (tier-2 + tier-3) + egui dashboard + keyless weather
 
 - Plugs for ALL vendors: Tapo P100/P105/P110/P115 (`tapo` crate, P115→P110
   fallback), Kasa legacy XOR + KLAP auto (`kasa-rs`, incl. UDP-shape JSON ops),

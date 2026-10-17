@@ -167,6 +167,7 @@ Fourteen tools, one dispatch loop:
 | `ring.doorbells` | same | Doorbells + dings + history |
 | `ring.alarm` | `mode?`, `location_id?`, … | Alarm state or `{mode, updated}` |
 | `ring.auth` / `ring.auth_2fa` | `email?`, `password?` / `code` | `{authenticated: true, …}` |
+| `weather.now` | `lat?`, `lon?` (Vienna default) | Keyless Open-Meteo summary, no account |
 
 Framing rules (the stdio invariant): **stdout is pure JSON-RPC** — every log
 line goes to stderr. Notifications get no reply. Unknown methods → `-32601`,
