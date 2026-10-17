@@ -3,6 +3,20 @@
 > Project status: **ALPHA** (2026-10-17). What's live vs. stub is tracked in
 > README's verification table and docs/PRD.md — this log records changes only.
 
+## Unreleased - chat, settings, scan, store history
+
+- In-app chat (Ollama default, LM Studio, clouds) + `llm.chat`/`llm.models`
+  tools (25 total) + house-context button; keys session-only or env.
+- Settings page: per-vendor secrets into the OS vault (Credential
+  Manager), Hue pairing, LLM key, LAN portscanner (Hue/Shelly precise
+  identification), adopt/delete device registry, manual entries.
+- SQLite long-term store (`devices-store`): weather/energy/alarm tables,
+  retention, `energy/weather/alarm.history` tools + CLI.
+- `net.scan` tool + CLI. Fleet-wide lesson learned: a borrowed `&str` in
+  a scan stream poisoned `Send` for the whole dispatch tree (every spawn
+  site failed with inscrutable HRTB errors) — owned types at all async
+  boundaries now, guarded by `dispatch_future_is_send`.
+
 ## v0.4.0 (2026-10-17) - live video, bridge, help, import fixes
 
 - Crossconnect: `bridge.rs` client (aiwatcher events, speech-mcp TTS,

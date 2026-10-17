@@ -28,6 +28,7 @@ pub mod plug_kasa;
 pub mod plug_shelly;
 pub mod plug_tapo;
 pub mod ring;
+pub mod scan;
 pub mod video;
 pub mod weather;
 
@@ -58,6 +59,7 @@ pub const CMD_WEATHER_HISTORY: &str = "weather.history";
 pub const CMD_ALARM_HISTORY: &str = "alarm.history";
 pub const CMD_LLM_CHAT: &str = "llm.chat";
 pub const CMD_LLM_MODELS: &str = "llm.models";
+pub const CMD_NETSCAN: &str = "net.scan";
 
 /// `None` credentials (rely on env) for terse call sites.
 pub fn no_creds() -> Credentials {
@@ -184,6 +186,9 @@ pub enum Command {
         base_url: Option<String>,
         api_key: Option<String>,
     },
+    NetScan {
+        subnet: String,
+    },
 }
 
 fn encode<T: serde::Serialize>(op: &str, result: Result<T, error::DeviceError>) -> Value {
@@ -212,7 +217,7 @@ pub async fn dispatch(cmd: Command) -> Value {
                 CMD_RING_AUTH, CMD_RING_AUTH_2FA, CMD_WEATHER,
                 CMD_BRIDGE_EVENT, CMD_BRIDGE_SPEAK, CMD_BRIDGE_WEBHOOK,
                 CMD_ENERGY_HISTORY, CMD_WEATHER_HISTORY, CMD_ALARM_HISTORY,
-                CMD_LLM_CHAT, CMD_LLM_MODELS,
+                CMD_LLM_CHAT, CMD_LLM_MODELS, CMD_NETSCAN,
             ],
             "agent_contract": "CLI-first: every command supports --json; `mcp` subcommand mirrors the same dispatch over stdio",
         }),
@@ -430,6 +435,22 @@ pub async fn dispatch(cmd: Command) -> Value {
                 .await
                 .map(|models| serde_json::json!({"models": models})),
         ),
+        Command::NetScan { subnet } => encode(
+            "net.scan",
+            scan::scan_subnet(&subnet).await.map(|found| {
+                serde_json::json!({
+                    "devices": found
+                        .into_iter()
+                        .map(|d| serde_json::json!({
+                            "ip": d.ip,
+                            "port": d.port,
+                            "kind": d.kind,
+                            "label": d.label,
+                        }))
+                        .collect::<Vec<_>>(),
+                })
+            }),
+        ),
         Command::AlarmHistory { hours } => match valid_hours(hours) {
             Ok(hours) => match devices_store::query_alarms(hours, 100) {
                 Ok(rows) => serde_json::Value::Array(rows),
@@ -473,7 +494,7 @@ mod tests {
             .and_then(|c| c.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(cmds.len(), 23);
+        assert_eq!(cmds.len(), 24);
     }
 
     #[tokio::test]
@@ -498,6 +519,15 @@ mod tests {
         })
         .await;
         assert!(v.get("updated").and_then(|u| u.as_bool()).unwrap_or(false));
+    }
+
+    #[test]
+    fn dispatch_future_is_send() {
+        // Regression guard: every spawn site needs dispatch() futures to be
+        // Send + 'static. If this fails, the compiler points at the guilty
+        // arm — fix it there, not at the call sites.
+        fn assert_send<T: Send>(_: T) {}
+        assert_send(dispatch(Command::Status));
     }
 
     #[tokio::test]
