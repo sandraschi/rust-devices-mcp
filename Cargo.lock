@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "devices-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "devices-core",
  "eframe",
@@ -1449,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "devices-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "image",
@@ -5183,7 +5183,7 @@ dependencies = [
 
 [[package]]
 name = "rust-devices-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "devices-core",
