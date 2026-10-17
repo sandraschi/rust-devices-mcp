@@ -13,6 +13,11 @@ pub enum DeviceError {
     Offline(String),
     /// Caller-supplied argument failed validation (hostile input fence).
     InvalidInput(String),
+    /// Credentials missing or rejected (account login, API key, token).
+    /// Never carries secret values — only what is missing and where to set it.
+    Auth(String),
+    /// Reachable device this driver cannot speak to (wrong generation, model).
+    Unsupported(String),
 }
 
 impl fmt::Display for DeviceError {
@@ -22,6 +27,8 @@ impl fmt::Display for DeviceError {
             DeviceError::Protocol(ctx) => write!(f, "protocol error: {ctx}"),
             DeviceError::Offline(ctx) => write!(f, "device offline: {ctx}"),
             DeviceError::InvalidInput(ctx) => write!(f, "invalid input: {ctx}"),
+            DeviceError::Auth(ctx) => write!(f, "auth failed: {ctx}"),
+            DeviceError::Unsupported(ctx) => write!(f, "unsupported: {ctx}"),
         }
     }
 }
