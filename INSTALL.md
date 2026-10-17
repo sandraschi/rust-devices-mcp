@@ -8,8 +8,10 @@ runtime, no admin rights. Uninstall = delete the files.
 From the [v0.1.0 release](https://github.com/sandraschi/rust-devices-mcp/releases/tag/v0.1.0):
 
 - `rust-devices-mcp.exe` (0.81 MB) — CLI + MCP server. **This is the tool.**
-- `devices-app.exe` (0.19 MB) — headless smoke demo (prints JSON, exits; the
-  real desktop window arrives in tier-4).
+- `devices-app.exe` (~31 MB, self-contained) — the **egui desktop dashboard**:
+  double-click, no install. Sidebar mirrors the webapp (Dashboard, Energy,
+  Lighting, Cameras, Weather, Alarms). Fields persist across restarts
+  (passwords never do). `devices-app.exe --smoke` self-tests without a window.
 - `SHA256SUMS.txt` — verify with:
   `Get-FileHash .\rust-devices-mcp.exe -Algorithm SHA256` and compare.
 

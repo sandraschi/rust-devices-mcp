@@ -19,6 +19,11 @@
 - Live-hardware bug bounty so far: JPEG segment-length off-by-2, Ring minimal
   refresh body, Ring User-Agent 406 — each with a regression test or comment.
 - 28/28 tests green, clippy `-D warnings` clean, fmt clean.
+- egui dashboard: sidebar navigation mirroring the webapp (Dashboard, Energy,
+  Lighting + per-light pages, Climate placeholder, Cameras, Weather, Alarms +
+  per-doorbell pages, Raw), high-contrast theme + 16px base, field persistence
+  (never passwords), `--smoke` headless CI. Tauri shell prototyped (4.64 MiB
+  NSIS) then removed for the standard-mandated native stack.
 
 ## 2026-10-17 - v0.1.0 scaffold (ArtCraft pilot)
 

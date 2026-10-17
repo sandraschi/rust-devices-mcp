@@ -101,7 +101,7 @@ rust-devices-mcp/
     ├── devices-core/           # L1: protocols, state machine, command bus
     │                           # (serde only — blind to UI, MCP, Tauri)
     ├── devices-mcp/            # L2: CLI-first binary + `mcp` stdio subcommand
-    └── devices-app/            # L3: desktop shell, in-process core calls
+    └── devices-app/            # L3: egui dashboard, in-process core calls
 ```
 
 Each crate has its own README: [`devices-core`](crates/devices-core/README.md),
@@ -224,7 +224,7 @@ Last verified 2026-10-17: tests 13/13, clippy clean, fmt clean, stdio probe
 | Tier-2 (plugs) | Real Tapo (`tapo` crate, P115→P110 fallback), Kasa (XOR→KLAP auto), Shelly (Gen1/Gen2 probe) | ✅ Code-complete; Tapo/Kasa/Shelly await creds/hardware |
 | Tier-2 (vendors) | Hue CLIP v1 + pairing, Netatmo OAuth2, Ring OAuth2+2FA + doorbells + alarms | ✅ Hue + Ring proven live; Netatmo awaits secret |
 | Tier-3 (cameras) | Real frames: tapo/onvif/usb/ring/url; SOF parser; `--out` files, metadata-only MCP | ✅ USB/URL/Ring/demo proven live; Tapo/ONVIF await camera passwords |
-| Tier-4 | Real Tauri crate + `ui/dist`, `package-nsis`, installer size/boot shootout | Planned |
+| Tier-4 | egui dashboard (sidebar + per-device pages, high-contrast), `--smoke` CI | ✅ Done (Tauri prototyped then removed per Rust standard) |
 | Deferred | Vision/OpenCV, voice, Plex, ONVIF, Ring/Nest/Hue, SDR, web dashboard | One `Command` variant each |
 
 Conversion source of truth: `devices-mcp` (`src/devices_mcp/tools/`,
