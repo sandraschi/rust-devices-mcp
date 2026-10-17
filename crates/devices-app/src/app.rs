@@ -32,6 +32,7 @@ enum Page {
     Alarms,
     DoorbellDetail(i64),
     Crossconnect,
+    Chat,
     Help,
     Raw,
 }
@@ -49,6 +50,7 @@ impl Page {
             Self::Alarms => "Alarms".to_string(),
             Self::DoorbellDetail(id) => format!("Doorbell {id}"),
             Self::Crossconnect => "Crossconnect".to_string(),
+            Self::Chat => "Chat".to_string(),
             Self::Help => "Help".to_string(),
             Self::Raw => "Raw JSON".to_string(),
         }
@@ -68,6 +70,9 @@ enum Job {
     },
     Ring(Value),
     Bridge(Value),
+    Chat(Value),
+    ChatContext(String),
+    ChatModels(Value),
 }
 
 struct Shot {
@@ -145,6 +150,14 @@ pub struct DevicesApp {
     bridge_urgency: String,
     bridge_text: String,
     bridge_log: Vec<String>,
+    chat_provider: String,
+    chat_base: String,
+    chat_model: String,
+    chat_key: String,
+    chat_input: String,
+    chat_system: String,
+    chat_models: Vec<String>,
+    messages: Vec<(bool, String)>,
     ring_locations: Vec<Value>,
     ring_doorbells: Vec<Value>,
     alarm_mode: String,
@@ -684,6 +697,14 @@ impl DevicesApp {
             bridge_urgency: String::new(),
             bridge_text: String::new(),
             bridge_log: Vec::new(),
+            chat_provider: String::new(),
+            chat_base: String::new(),
+            chat_model: String::new(),
+            chat_key: String::new(),
+            chat_input: String::new(),
+            chat_system: String::new(),
+            chat_models: Vec::new(),
+            messages: Vec::new(),
             ring_locations: Vec::new(),
             ring_doorbells: Vec::new(),
             alarm_mode: "disarmed".to_string(),
@@ -718,6 +739,8 @@ impl DevicesApp {
             "ring_token": self.ring_token, "ring_id": self.ring_id,
             "alarm_location": self.alarm_location,
             "dark_mode": self.dark_mode, "zoom": self.zoom_saved,
+            "chat_provider": self.chat_provider, "chat_base": self.chat_base,
+            "chat_model": self.chat_model,
         })
     }
 
@@ -765,6 +788,10 @@ impl DevicesApp {
         filled("cam_index", &mut self.cam_index);
         filled("cam_url", &mut self.cam_url);
         filled("cam_token", &mut self.cam_token);
+        filled("chat_provider", &mut self.chat_provider);
+        filled("chat_base", &mut self.chat_base);
+        filled("chat_model", &mut self.chat_model);
+        // chat_key deliberately never persists (session-only secret).
         filled("ring_token", &mut self.ring_token);
         filled("ring_id", &mut self.ring_id);
         filled("alarm_location", &mut self.alarm_location);
@@ -886,6 +913,26 @@ impl DevicesApp {
                         self.bridge_log.remove(0);
                     }
                     self.note("bridge call finished — see log");
+                }
+                Job::Chat(value) => {
+                    self.show_raw(&value);
+                    if let Some(reply) = value.get("reply").and_then(|v| v.as_str()) {
+                        self.messages.push((false, reply.to_string()));
+                    } else if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                        self.messages.push((false, format!("error: {err}")));
+                    }
+                }
+                Job::ChatContext(text) => {
+                    self.messages.push((true, text));
+                }
+                Job::ChatModels(value) => {
+                    self.show_raw(&value);
+                    if let Some(list) = value.get("models").and_then(|v| v.as_array()) {
+                        self.chat_models = list
+                            .iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect();
+                    }
                 }
                 Job::Ring(value) => {
                     self.show_raw(&value);
@@ -1499,6 +1546,7 @@ impl eframe::App for DevicesApp {
                     }
                 });
                 self.nav_button(ui, Page::Crossconnect);
+                self.nav_button(ui, Page::Chat);
                 self.nav_button(ui, Page::Help);
                 self.nav_button(ui, Page::Raw);
             });
@@ -1515,6 +1563,7 @@ impl eframe::App for DevicesApp {
             Page::Alarms => self.page_alarms(ui),
             Page::DoorbellDetail(id) => self.page_doorbell_detail(ui, id),
             Page::Crossconnect => self.page_crossconnect(ui),
+            Page::Chat => self.page_chat(ui),
             Page::Help => self.page_help(ui),
             Page::Raw => {
                 ui.heading("Raw JSON");
@@ -2084,6 +2133,112 @@ impl DevicesApp {
         });
     }
 
+    fn spawn_chat(&mut self) {
+        let text = self.chat_input.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.messages.push((true, text.clone()));
+        self.chat_input.clear();
+        // History goes along (bounded — last 20 turns keep context small).
+        let history: Vec<(bool, String)> = self.messages.iter().rev().take(20).cloned().collect();
+        let (provider, base, model, key, system) = (
+            Self::opt(&self.chat_provider),
+            Self::opt(&self.chat_base),
+            Self::opt(&self.chat_model),
+            Self::opt(&self.chat_key),
+            Self::opt(&self.chat_system).filter(|s| !s.is_empty()),
+        );
+        self.note("thinking…");
+        self.spawn(move || async move {
+            let mut messages = Vec::new();
+            if let Some(system) = system.filter(|s| !s.trim().is_empty()) {
+                messages.push(devices_core::llm::ChatMessage::system(system));
+            }
+            for (user, content) in history.into_iter().rev() {
+                messages.push(if user {
+                    devices_core::llm::ChatMessage::user(content)
+                } else {
+                    devices_core::llm::ChatMessage {
+                        role: "assistant".to_string(),
+                        content,
+                    }
+                });
+            }
+            messages.push(devices_core::llm::ChatMessage::user(text));
+            Job::Chat(
+                dispatch(Command::LlmChat {
+                    provider,
+                    base_url: base,
+                    model,
+                    api_key: key,
+                    history: messages,
+                })
+                .await,
+            )
+        });
+    }
+
+    fn spawn_chat_models(&mut self) {
+        let (provider, base, key) = (
+            Self::opt(&self.chat_provider),
+            Self::opt(&self.chat_base),
+            Self::opt(&self.chat_key),
+        );
+        self.note("listing models…");
+        self.spawn(move || async move {
+            Job::ChatModels(
+                dispatch(Command::LlmModels {
+                    provider,
+                    base_url: base,
+                    api_key: key,
+                })
+                .await,
+            )
+        });
+    }
+
+    fn spawn_house_context(&mut self) {
+        // Best-effort status gather (fleet creds where the app has them);
+        // failures become text lines, never panics.
+        let plug_ip = self.plug_ip.trim().to_string();
+        let plug_vendor = self.plug_vendor.clone();
+        let plug_user = Self::opt(&self.plug_user);
+        let plug_pass = Self::opt(&self.plug_pass);
+        self.note("gathering house context…");
+        self.spawn(move || async move {
+            let status = dispatch(Command::Status).await;
+            let weather = dispatch(Command::Weather {
+                latitude: None,
+                longitude: None,
+            })
+            .await;
+            let vendor = devices_core::creds::Vendor::parse(&plug_vendor)
+                .unwrap_or(devices_core::creds::Vendor::Demo);
+            let creds = devices_core::creds::Credentials::resolve(vendor, plug_user, plug_pass)
+                .unwrap_or_default();
+            let plug = dispatch(Command::PlugStats {
+                vendor,
+                device_ip: plug_ip,
+                creds,
+            })
+            .await;
+            let text = format!(
+                "HOUSE CONTEXT (live):\nstatus={}\nweather={}\nplug={}",
+                status
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?"),
+                weather
+                    .get("summary")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?"),
+                plug.to_string().chars().take(600).collect::<String>(),
+            );
+            Job::ChatContext(text)
+        });
+    }
+
     fn spawn_weather_latlon(&mut self, lat: Option<f64>, lon: Option<f64>) {
         self.note("fetching weather…");
         self.spawn(move || async move {
@@ -2304,6 +2459,94 @@ impl DevicesApp {
                     ui.label("No calls yet this session.");
                 }
             });
+        });
+    }
+
+    fn page_chat(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Chat — Ollama, LM Studio, clouds");
+        card_frame(ui, |ui| {
+            combo(
+                ui,
+                "Provider",
+                &mut self.chat_provider,
+                &["", "ollama", "lmstudio", "openai", "anthropic", "custom"],
+            );
+            field(
+                ui,
+                "Base URL",
+                &mut self.chat_base,
+                false,
+                "blank = provider default",
+            );
+            if self.chat_models.is_empty() {
+                field(ui, "Model", &mut self.chat_model, false, "qwen3.8:27b");
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label("Model");
+                    egui::ComboBox::from_id_salt("chat-model")
+                        .selected_text(self.chat_model.as_str())
+                        .show_ui(ui, |ui| {
+                            for model in self.chat_models.clone() {
+                                ui.selectable_value(&mut self.chat_model, model.clone(), model);
+                            }
+                        });
+                });
+            }
+            field(
+                ui,
+                "API key",
+                &mut self.chat_key,
+                true,
+                "session-only, never stored",
+            );
+            field(
+                ui,
+                "System prompt",
+                &mut self.chat_system,
+                false,
+                "optional",
+            );
+            ui.horizontal(|ui| {
+                if ui.button("List models").clicked() {
+                    self.spawn_chat_models();
+                }
+                if ui.button("Add house context").clicked() {
+                    self.spawn_house_context();
+                }
+                if ui.button("Clear chat").clicked() {
+                    self.messages.clear();
+                }
+            });
+        });
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                for (user, text) in self.messages.clone() {
+                    card_frame(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(if user { "YOU" } else { "MODEL" })
+                                .strong()
+                                .color(if user { SKY } else { ENERGY }),
+                        );
+                        ui.label(text);
+                    });
+                }
+                if self.messages.is_empty() {
+                    ui.label("No messages yet. Add house context, then ask away.");
+                }
+            });
+        ui.separator();
+        ui.horizontal(|ui| {
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.chat_input)
+                    .hint_text("Ask about your home… (Enter sends)")
+                    .desired_width(ui.available_width() - 90.0),
+            );
+            let send_clicked = primary(ui, "Send").clicked();
+            let enter_pressed = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if send_clicked || enter_pressed {
+                self.spawn_chat();
+            }
         });
     }
 

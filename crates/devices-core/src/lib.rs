@@ -21,6 +21,7 @@ pub mod creds;
 pub mod error;
 pub mod hue;
 pub mod import;
+pub mod llm;
 pub mod netatmo;
 pub mod plug;
 pub mod plug_kasa;
@@ -55,6 +56,8 @@ pub const CMD_BRIDGE_WEBHOOK: &str = "bridge.webhook";
 pub const CMD_ENERGY_HISTORY: &str = "energy.history";
 pub const CMD_WEATHER_HISTORY: &str = "weather.history";
 pub const CMD_ALARM_HISTORY: &str = "alarm.history";
+pub const CMD_LLM_CHAT: &str = "llm.chat";
+pub const CMD_LLM_MODELS: &str = "llm.models";
 
 /// `None` credentials (rely on env) for terse call sites.
 pub fn no_creds() -> Credentials {
@@ -169,6 +172,18 @@ pub enum Command {
     AlarmHistory {
         hours: u32,
     },
+    LlmChat {
+        provider: Option<String>,
+        base_url: Option<String>,
+        model: Option<String>,
+        api_key: Option<String>,
+        history: Vec<llm::ChatMessage>,
+    },
+    LlmModels {
+        provider: Option<String>,
+        base_url: Option<String>,
+        api_key: Option<String>,
+    },
 }
 
 fn encode<T: serde::Serialize>(op: &str, result: Result<T, error::DeviceError>) -> Value {
@@ -197,6 +212,7 @@ pub async fn dispatch(cmd: Command) -> Value {
                 CMD_RING_AUTH, CMD_RING_AUTH_2FA, CMD_WEATHER,
                 CMD_BRIDGE_EVENT, CMD_BRIDGE_SPEAK, CMD_BRIDGE_WEBHOOK,
                 CMD_ENERGY_HISTORY, CMD_WEATHER_HISTORY, CMD_ALARM_HISTORY,
+                CMD_LLM_CHAT, CMD_LLM_MODELS,
             ],
             "agent_contract": "CLI-first: every command supports --json; `mcp` subcommand mirrors the same dispatch over stdio",
         }),
@@ -387,6 +403,33 @@ pub async fn dispatch(cmd: Command) -> Value {
             },
             Err(e) => serde_json::json!({"error": e.to_string()}),
         },
+        Command::LlmChat {
+            provider,
+            base_url,
+            model,
+            api_key,
+            history,
+        } => {
+            if history.is_empty() {
+                return serde_json::json!({"error": "llm.chat: empty history"});
+            }
+            encode(
+                "llm.chat",
+                llm::chat(provider, base_url, model, api_key, history)
+                    .await
+                    .map(|reply| serde_json::json!({"reply": reply})),
+            )
+        }
+        Command::LlmModels {
+            provider,
+            base_url,
+            api_key,
+        } => encode(
+            "llm.models",
+            llm::models(provider, base_url, api_key)
+                .await
+                .map(|models| serde_json::json!({"models": models})),
+        ),
         Command::AlarmHistory { hours } => match valid_hours(hours) {
             Ok(hours) => match devices_store::query_alarms(hours, 100) {
                 Ok(rows) => serde_json::Value::Array(rows),
@@ -430,7 +473,7 @@ mod tests {
             .and_then(|c| c.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(cmds.len(), 21);
+        assert_eq!(cmds.len(), 23);
     }
 
     #[tokio::test]

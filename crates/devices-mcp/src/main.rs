@@ -251,6 +251,34 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// One chat turn with Ollama / LM Studio / cloud (provider unset = Ollama)
+    Chat {
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        base_url: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        api_key: Option<String>,
+        #[arg(long)]
+        system: Option<String>,
+        #[arg(long)]
+        message: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List models on an OpenAI-compatible server (not Anthropic)
+    LlmModels {
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        base_url: Option<String>,
+        #[arg(long)]
+        api_key: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Alarm events from the local SQLite store
     AlarmHistory {
         #[arg(long, default_value_t = 168)]
@@ -597,6 +625,35 @@ fn tools_list() -> Value {
                     },
                 },
             },
+            {
+                "name": "llm.chat",
+                "description": "One chat turn with Ollama (default), LM Studio, or a cloud (openai/anthropic/custom). Keys via args or LLM_API_KEY env, never logged.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string"},
+                        "base_url": {"type": "string"},
+                        "model": {"type": "string"},
+                        "api_key": {"type": "string"},
+                        "system": {"type": "string"},
+                        "message": {"type": "string"},
+                        "history": {"type": "array"},
+                    },
+                    "required": ["message"],
+                },
+            },
+            {
+                "name": "llm.models",
+                "description": "List models on an OpenAI-compatible server (Ollama/LM Studio/cloud). Anthropic has no such endpoint.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "provider": {"type": "string"},
+                        "base_url": {"type": "string"},
+                        "api_key": {"type": "string"},
+                    },
+                },
+            },
         ]
     })
 }
@@ -766,6 +823,36 @@ fn call_tool(name: &str, args: &Value) -> Value {
         }),
         "alarm.history" => run(Command::AlarmHistory {
             hours: args.get("hours").and_then(|v| v.as_u64()).unwrap_or(168) as u32,
+        }),
+        "llm.chat" => {
+            let history: Vec<devices_core::llm::ChatMessage> = args
+                .get("history")
+                .and_then(|h| serde_json::from_value(h.clone()).ok())
+                .unwrap_or_default();
+            let history = if history.is_empty() {
+                let mut single = Vec::new();
+                if let Some(system) = opt(args, "system").filter(|s| !s.trim().is_empty()) {
+                    single.push(devices_core::llm::ChatMessage::system(system));
+                }
+                single.push(devices_core::llm::ChatMessage::user(
+                    opt(args, "message").unwrap_or_default(),
+                ));
+                single
+            } else {
+                history
+            };
+            run(Command::LlmChat {
+                provider: opt(args, "provider"),
+                base_url: opt(args, "base_url"),
+                model: opt(args, "model"),
+                api_key: opt(args, "api_key"),
+                history,
+            })
+        }
+        "llm.models" => run(Command::LlmModels {
+            provider: opt(args, "provider"),
+            base_url: opt(args, "base_url"),
+            api_key: opt(args, "api_key"),
         }),
         _ => return wrap_err(format!("unknown tool: {name}")),
     };
@@ -1090,6 +1177,48 @@ fn main() {
         } => {
             show(run(Command::AlarmHistory { hours }), as_json, "");
         }
+        Commands::Chat {
+            provider,
+            base_url,
+            model,
+            api_key,
+            system,
+            message,
+            json: as_json,
+        } => {
+            let mut history = Vec::new();
+            if let Some(system) = system.filter(|s| !s.trim().is_empty()) {
+                history.push(devices_core::llm::ChatMessage::system(system));
+            }
+            history.push(devices_core::llm::ChatMessage::user(message));
+            show(
+                run(Command::LlmChat {
+                    provider,
+                    base_url,
+                    model,
+                    api_key,
+                    history,
+                }),
+                as_json,
+                "",
+            );
+        }
+        Commands::LlmModels {
+            provider,
+            base_url,
+            api_key,
+            json: as_json,
+        } => {
+            show(
+                run(Command::LlmModels {
+                    provider,
+                    base_url,
+                    api_key,
+                }),
+                as_json,
+                "",
+            );
+        }
         Commands::RingAuth2fa {
             code,
             email,
@@ -1195,14 +1324,14 @@ mod tests {
     use devices_core::no_creds;
 
     #[test]
-    fn catalog_lists_twentyone_tools() {
+    fn catalog_lists_twentythree_tools() {
         let catalog = tools_list();
         let tools = catalog
             .get("tools")
             .and_then(|t| t.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(tools.len(), 21);
+        assert_eq!(tools.len(), 23);
     }
 
     #[test]
