@@ -631,7 +631,7 @@ fn main() {
             show(
                 run(Command::Status),
                 as_json,
-                "rust-devices-mcp v0.2.0 - pure Rust, CLI-first",
+                "rust-devices-mcp v0.3.0 - pure Rust, CLI-first",
             );
         }
         Commands::PlugStats {

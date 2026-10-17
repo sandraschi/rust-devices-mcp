@@ -1,6 +1,6 @@
 [package]
 name = "rust-devices-mcp"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "L2 CLI-first binary + MCP stdio server over devices-core (ArtCraft cadcraft pattern)"
 license = "MIT OR Apache-2.0"
