@@ -1,0 +1,16 @@
+/target/
+**/target/
+Cargo.lock
+*.bak
+*.bak.*
+*.exe
+*.pdb
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+data/
+*.sqlite3
+*.db*
+.env
+CHANGELOG.local.md
