@@ -18,12 +18,23 @@ agents get `--json` or full MCP tools — all powered by the same
 
 ```text
 rust-devices-mcp status [--json]
-rust-devices-mcp plug-stats --device-ip <IP> [--json]
-rust-devices-mcp plug-toggle --device-ip <IP> --state <true|false> [--json]
+rust-devices-mcp plug-stats --vendor tapo|kasa|shelly|demo --device-ip <IP> [--username --password] [--json]
+rust-devices-mcp plug-toggle --vendor … --device-ip <IP> --state <true|false> [--json]
 rust-devices-mcp camera-describe --device-ip <IP> [--json]
-rust-devices-mcp camera-snapshot --device-ip <IP> [--json]
+rust-devices-mcp camera-snapshot --source tapo|onvif|usb|ring|url|demo [--device-ip …] [--model …] [--username --password] [--onvif-port …] [--device-index …] [--url …] [--out …] [--token-file …] [--json]
+rust-devices-mcp hue-lights [--bridge-ip --username] [--json]
+rust-devices-mcp hue-set-light --light-id <ID> --on <true|false> [--bri 1-254] [--json]
+rust-devices-mcp hue-pair --bridge-ip <IP>
+rust-devices-mcp netatmo-stations [--client-id --client-secret --refresh-token] [--json]
+rust-devices-mcp ring-status | ring-doorbells [--email --password --token-file] [--json]
+rust-devices-mcp ring-alarm [--mode disarmed|home|away] [--location-id …] [--json]
+rust-devices-mcp ring-auth [--email --password] [--json]
+rust-devices-mcp ring-auth-2fa --code <CODE> [--json]
 rust-devices-mcp mcp
 ```
+
+Credentials fall back to env (`TAPO_EMAIL`, `HUE_BRIDGE_IP`, `RING_TOKEN_FILE`,
+… — full table in the root README). Missing secrets fail typed, never silent.
 
 ## MCP (2024-11-05, hand-rolled framing)
 
@@ -50,6 +61,6 @@ crash. Probe:
 
 ## Tests
 
-3 unit tests: catalog holds 5 tools, unknown tool → error content, missing
+8 unit tests: catalog holds 14 tools, unknown tool → error content, missing
 `state` defaults without panic. Plus the live stdio probe in CI-by-hand
 (see root README verification). Run: `cargo test -p rust-devices-mcp`.

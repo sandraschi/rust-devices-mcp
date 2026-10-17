@@ -36,7 +36,28 @@ cd C:\Tools\rust-devices-mcp
 > parsing → dispatch → JSON, identical over CLI and MCP — not the hardware
 > handshake. Real Tapo drivers are tier-2 (see README scorecard).
 
-## 3. Use it as an MCP server
+## 3. Credentials (v0.2+ real drivers)
+
+Explicit flags win; environment is the fallback; nothing is ever logged:
+
+| Vendor | Env vars |
+|---|---|
+| Tapo plugs | `TAPO_EMAIL` (or `TAPO_USERNAME`) + `TAPO_PASSWORD` |
+| Tapo cameras | above (handshake) + `CAMERA_USERNAME`/`CAMERA_PASSWORD` (or `TAPO_CAMERA_*`) |
+| Kasa | `KASA_USERNAME` + `KASA_PASSWORD` (legacy XOR needs none) |
+| Shelly | `SHELLY_PASSWORD` (optional) |
+| Hue | `HUE_BRIDGE_IP` + `HUE_USERNAME` (pair once: `hue-pair` after pressing the link button) |
+| Netatmo | `NETATMO_CLIENT_ID` + `NETATMO_CLIENT_SECRET` + `NETATMO_REFRESH_TOKEN` |
+| Ring | `RING_EMAIL` + `RING_PASSWORD` (first login, maybe 2FA) or token cache (`RING_TOKEN_FILE`, default `ring_token.cache`) |
+| ONVIF | `CAMERA_USERNAME` + `CAMERA_PASSWORD`, `--onvif-port` (default 2020) |
+
+```powershell
+$env:TAPO_EMAIL = "you@example.com"; $env:TAPO_PASSWORD = "..."
+.\rust-devices-mcp.exe plug-stats --vendor tapo --device-ip 192.168.0.17 --json
+.\rust-devices-mcp.exe camera-snapshot --source usb --device-index 0 --out snapshot.jpg
+```
+
+## 4. Use it as an MCP server
 
 Any stdio-capable MCP client works: command = path to the exe, args = `["mcp"]`.
 No ports, no daemon to start, logs on stderr, JSON-RPC on stdout.
