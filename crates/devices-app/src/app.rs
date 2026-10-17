@@ -81,6 +81,9 @@ pub struct DevicesApp {
     rx: mpsc::Receiver<Job>,
     pending: usize,
     fleet: Option<FleetImport>,
+    dark_mode: bool,
+    zoom_saved: f32,
+    power_history: std::collections::VecDeque<(String, f64)>,
     page: Page,
     sidebar_open: bool,
     status_line: String,
@@ -159,7 +162,122 @@ fn harsh_visuals() -> egui::Visuals {
     visuals.widgets.hovered.corner_radius = egui::CornerRadius::same(8);
     visuals.widgets.active.corner_radius = egui::CornerRadius::same(8);
     visuals.widgets.open.corner_radius = egui::CornerRadius::same(8);
+    // Panel separator hairlines (topbar/sidebar/statusbar dividers).
+    visuals.widgets.noninteractive.bg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 54, 84));
+    // Button + text-input outlines; accent on hover.
+    visuals.widgets.inactive.bg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(48, 66, 102));
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, ACCENT);
     visuals
+}
+
+/// Light companion to `harsh_visuals` (slate-50 panels, white cards).
+fn crisp_light_visuals() -> egui::Visuals {
+    let mut visuals = egui::Visuals::light();
+    visuals.override_text_color = Some(egui::Color32::from_rgb(15, 23, 42));
+    visuals.window_fill = egui::Color32::from_rgb(248, 250, 252);
+    visuals.panel_fill = egui::Color32::from_rgb(248, 250, 252);
+    visuals.extreme_bg_color = egui::Color32::from_rgb(241, 245, 249);
+    visuals.code_bg_color = egui::Color32::from_rgb(241, 245, 249);
+    visuals.widgets.noninteractive.bg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(226, 232, 240));
+    visuals.widgets.inactive.bg_stroke =
+        egui::Stroke::new(1.0, egui::Color32::from_rgb(203, 213, 225));
+    visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.5, ACCENT);
+    visuals.window_corner_radius = egui::CornerRadius::same(12);
+    visuals.menu_corner_radius = egui::CornerRadius::same(8);
+    visuals
+}
+
+/// Theme + typography in one place: `set_visuals` replaces the whole style,
+/// so fonts must be re-applied on every toggle (called in `new` and on flip).
+fn apply_theme(ctx: &egui::Context, dark_mode: bool) {
+    ctx.set_visuals(if dark_mode {
+        harsh_visuals()
+    } else {
+        crisp_light_visuals()
+    });
+    ctx.style_mut_of(
+        if dark_mode {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        },
+        |style| {
+            use egui::TextStyle::*;
+            for (text_style, size) in [
+                (Body, 16.0),
+                (Button, 16.0),
+                (Heading, 23.0),
+                (Monospace, 14.0),
+                (Small, 13.0),
+            ] {
+                if let Some(font) = style.text_styles.get_mut(&text_style) {
+                    font.size = size;
+                }
+            }
+            style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+            style.spacing.button_padding = egui::vec2(10.0, 6.0);
+        },
+    );
+}
+
+/// Ctrl+MouseWheel global zoom (Ctrl+Plus/Minus/0 work automatically).
+fn handle_zoom(ctx: &egui::Context) {
+    let scroll_y = ctx.input(|input| {
+        if input.modifiers.ctrl || input.modifiers.command {
+            input.smooth_scroll_delta.y
+        } else {
+            0.0
+        }
+    });
+    if scroll_y.abs() > 0.0 {
+        let step = if scroll_y > 0.0 {
+            1.1_f32
+        } else {
+            1.0 / 1.1_f32
+        };
+        ctx.set_zoom_factor((ctx.zoom_factor() * step).clamp(0.6, 2.5));
+    }
+}
+
+/// Theme toggle: vector sun / crescent moon (glyphs would be tofu).
+fn theme_toggle_button(ui: &mut egui::Ui, dark_mode: &mut bool) {
+    let size = egui::vec2(30.0, 30.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&resp);
+        ui.painter().rect(
+            rect,
+            egui::CornerRadius::same(6),
+            visuals.bg_fill,
+            visuals.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
+        let center = rect.center();
+        let painter = ui.painter();
+        if *dark_mode {
+            let sun = egui::Color32::from_rgb(251, 191, 36);
+            painter.circle_filled(center, 4.5, sun);
+            for i in 0..8 {
+                let angle = (i as f32) * std::f32::consts::TAU / 8.0;
+                let dir = egui::vec2(angle.cos(), angle.sin());
+                painter.line_segment(
+                    [center + dir * 6.5, center + dir * 9.2],
+                    egui::Stroke::new(1.6, sun),
+                );
+            }
+        } else {
+            let moon = egui::Color32::from_rgb(51, 65, 85);
+            painter.circle_filled(center, 6.5, moon);
+            painter.circle_filled(center + egui::vec2(3.0, -2.2), 5.5, visuals.bg_fill);
+        }
+    }
+    if resp.on_hover_text("Toggle light / dark theme").clicked() {
+        *dark_mode = !*dark_mode;
+        apply_theme(ui.ctx(), *dark_mode);
+    }
 }
 
 /// Brand accents per domain (mirrors the webapp's color language).
@@ -172,12 +290,36 @@ const RING_BLUE: egui::Color32 = egui::Color32::from_rgb(147, 197, 253);
 const GOOD: egui::Color32 = egui::Color32::from_rgb(110, 255, 150);
 const BAD: egui::Color32 = egui::Color32::from_rgb(255, 150, 150);
 
-/// Card container: lifted fill, 12px rounding, hairline stroke, soft shadow.
+/// Card container: theme-aware fill, 12px rounding, hairline stroke, shadow.
 fn card_frame(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame {
-        fill: egui::Color32::from_rgb(16, 26, 46),
+    accent_card_frame(ui, None, add_contents);
+}
+
+/// Card with an optional 3px accent stripe along its top edge (Tailwind
+/// `border-l-4` language in GPU geometry). The stripe paints from the
+/// frame's own rect — never from `available_width`, which overflows the
+/// drawn card (caught by the hero_kpi golden, 2026-10-17).
+fn accent_card_frame(
+    ui: &mut egui::Ui,
+    accent: Option<egui::Color32>,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    let dark = ui.visuals().dark_mode;
+    let (fill, stroke) = if dark {
+        (
+            egui::Color32::from_rgb(16, 26, 46),
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 52, 82)),
+        )
+    } else {
+        (
+            egui::Color32::WHITE,
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(203, 213, 225)),
+        )
+    };
+    let frame_rect = egui::Frame {
+        fill,
         corner_radius: egui::CornerRadius::same(12),
-        stroke: egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 52, 82)),
+        stroke,
         shadow: egui::Shadow {
             offset: [0, 3],
             blur: 14,
@@ -190,7 +332,13 @@ fn card_frame(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
             ..Default::default()
         },
     }
-    .show(ui, add_contents);
+    .show(ui, add_contents)
+    .response
+    .rect;
+    if let Some(color) = accent {
+        let stripe = egui::Rect::from_min_size(frame_rect.min, egui::vec2(frame_rect.width(), 3.0));
+        ui.painter().rect_filled(stripe, 1.0, color);
+    }
 }
 
 /// Primary action button (brand orange); danger variant for destructive acts.
@@ -205,15 +353,93 @@ fn primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
     )
 }
 
-/// Hero KPI: big tinted number on a card. Dashboard row material.
+/// Hero KPI: big tinted number on a card with a 3px accent stripe
+/// (Tailwind `border-l-4` language, in GPU geometry).
 fn hero_kpi(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) {
-    card_frame(ui, |ui| {
-        ui.label(
-            egui::RichText::new(label)
-                .size(13.0)
-                .color(egui::Color32::from_rgb(160, 175, 200)),
-        );
+    accent_card_frame(ui, Some(color), |ui| {
+        let dim = if ui.visuals().dark_mode {
+            egui::Color32::from_rgb(160, 175, 200)
+        } else {
+            egui::Color32::from_rgb(71, 85, 105)
+        };
+        ui.label(egui::RichText::new(label).size(13.0).color(dim));
         ui.label(egui::RichText::new(value).size(30.0).strong().color(color));
+    });
+}
+
+/// Zero-dependency GPU spark chart (gridlines + curve + nodes + hover).
+/// Fewer than 2 samples renders an honest placeholder, never a flat line.
+fn spark_chart(
+    ui: &mut egui::Ui,
+    title: &str,
+    unit: &str,
+    samples: &[(String, f64)],
+    stroke_color: egui::Color32,
+) {
+    card_frame(ui, |ui| {
+        ui.label(egui::RichText::new(title).strong());
+        let desired = egui::vec2(ui.available_width().max(240.0), 140.0);
+        let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        let grid = egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+        for frac in [0.0_f32, 0.5, 1.0] {
+            let y = egui::lerp(rect.top() + 8.0..=rect.bottom() - 18.0, frac);
+            painter.line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                grid,
+            );
+        }
+        if samples.len() < 2 {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Collecting samples...",
+                egui::FontId::proportional(14.0),
+                ui.visuals().text_color(),
+            );
+            return;
+        }
+        let min_v = samples
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::INFINITY, f64::min);
+        let max_v = samples
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let span = (max_v - min_v).abs().max(1.0);
+        let plot = rect.shrink2(egui::vec2(6.0, 14.0));
+        let denom = (samples.len().saturating_sub(1)).max(1) as f32;
+        let pts: Vec<egui::Pos2> = samples
+            .iter()
+            .enumerate()
+            .map(|(idx, (_, val))| {
+                egui::pos2(
+                    egui::lerp(plot.left()..=plot.right(), (idx as f32) / denom),
+                    egui::lerp(plot.bottom()..=plot.top(), ((*val - min_v) / span) as f32),
+                )
+            })
+            .collect();
+        painter.add(egui::Shape::line(
+            pts.clone(),
+            egui::Stroke::new(2.2, stroke_color),
+        ));
+        for pt in &pts {
+            painter.circle_filled(*pt, 3.5, stroke_color);
+        }
+        if let Some(mouse) = resp.hover_pos() {
+            if let Some((idx, pt)) = pts
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| (a.x - mouse.x).abs().total_cmp(&(b.x - mouse.x).abs()))
+            {
+                if let Some((label, val)) = samples.get(idx) {
+                    painter.vline(pt.x, plot.y_range(), egui::Stroke::new(1.0, stroke_color));
+                    painter.circle_stroke(*pt, 6.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
+                    resp.on_hover_text(format!("{label}: {val:.1} {unit}"));
+                }
+            }
+        }
     });
 }
 
@@ -230,23 +456,6 @@ fn danger(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 impl DevicesApp {
     pub fn new(ctx: &eframe::CreationContext<'_>, rt: Arc<tokio::runtime::Runtime>) -> Self {
-        ctx.egui_ctx.set_visuals(harsh_visuals());
-        ctx.egui_ctx.style_mut_of(egui::Theme::Dark, |style| {
-            use egui::TextStyle::*;
-            for (text_style, size) in [
-                (Body, 16.0),
-                (Button, 16.0),
-                (Heading, 23.0),
-                (Monospace, 14.0),
-                (Small, 13.0),
-            ] {
-                if let Some(font) = style.text_styles.get_mut(&text_style) {
-                    font.size = size;
-                }
-            }
-            style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-            style.spacing.button_padding = egui::vec2(10.0, 6.0);
-        });
         let (tx, rx) = mpsc::channel();
         let mut app = Self {
             rt,
@@ -254,6 +463,9 @@ impl DevicesApp {
             rx,
             pending: 0,
             fleet: None,
+            dark_mode: true,
+            zoom_saved: 1.0,
+            power_history: std::collections::VecDeque::new(),
             page: Page::Dashboard,
             sidebar_open: true,
             status_line: "starting…".to_string(),
@@ -290,6 +502,8 @@ impl DevicesApp {
             alarm_location: String::new(),
         };
         app.load_fields();
+        apply_theme(&ctx.egui_ctx, app.dark_mode);
+        ctx.egui_ctx.set_zoom_factor(app.zoom_saved);
         app.apply_fleet_import();
         // Dashboard paints real data immediately: no creds needed anywhere here.
         app.spawn_status();
@@ -315,6 +529,7 @@ impl DevicesApp {
             "cam_url": self.cam_url, "cam_token": self.cam_token,
             "ring_token": self.ring_token, "ring_id": self.ring_id,
             "alarm_location": self.alarm_location,
+            "dark_mode": self.dark_mode, "zoom": self.zoom_saved,
         })
     }
 
@@ -365,6 +580,15 @@ impl DevicesApp {
         filled("ring_token", &mut self.ring_token);
         filled("ring_id", &mut self.ring_id);
         filled("alarm_location", &mut self.alarm_location);
+        if let Some(dark) = json.get("dark_mode").and_then(|v| v.as_bool()) {
+            self.dark_mode = dark;
+        }
+        if let Some(zoom) = json.get("zoom").and_then(|v| v.as_f64()) {
+            let zoom = zoom as f32;
+            if zoom.is_finite() && (0.6..=2.5).contains(&zoom) {
+                self.zoom_saved = zoom;
+            }
+        }
     }
 
     // ----- job plumbing -----
@@ -399,6 +623,15 @@ impl DevicesApp {
                 }
                 Job::Plug(value) => {
                     self.show_raw(&value);
+                    if let (Some(ip), Some(watts)) = (
+                        value.get("device_ip").and_then(|v| v.as_str()),
+                        value.get("current_power_watts").and_then(|v| v.as_f64()),
+                    ) {
+                        self.power_history.push_back((ip.to_string(), watts));
+                        while self.power_history.len() > 60 {
+                            self.power_history.pop_front();
+                        }
+                    }
                     self.plug_cards.push(value);
                     if self.plug_cards.len() > 6 {
                         self.plug_cards.remove(0);
@@ -938,8 +1171,8 @@ fn value_rows(ui: &mut egui::Ui, value: &Value) {
 
 fn on_pill(ui: &mut egui::Ui, on: bool) {
     // Status dots are painted circles, not glyphs: geometric codepoints
-    // (● U+25CF et al.) have no glyph in egui 0.37's bundled fonts and
-    // render as tofu. See the glyph_allowlist test below.
+    // (U+25CF et al.) have no glyph in egui 0.37's bundled fonts and
+    // render as tofu. See the glyph tests below.
     ui.horizontal(|ui| {
         let (color, text) = if on { (GOOD, "ON") } else { (BAD, "OFF") };
         let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
@@ -952,6 +1185,11 @@ impl eframe::App for DevicesApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.drain(&ctx);
+        handle_zoom(&ctx);
+        if (ctx.zoom_factor() - self.zoom_saved).abs() > f32::EPSILON {
+            self.zoom_saved = ctx.zoom_factor();
+            self.save_fields();
+        }
 
         egui::Panel::top("topbar").show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -967,6 +1205,19 @@ impl eframe::App for DevicesApp {
                 if self.pending > 0 {
                     ui.spinner();
                     ui.label(format!("{} jobs", self.pending));
+                }
+                let zoom_label = format!("{}%", (ctx.zoom_factor() * 100.0).round());
+                if ui
+                    .button(zoom_label)
+                    .on_hover_text("UI zoom (Ctrl+wheel); click resets to 100%")
+                    .clicked()
+                {
+                    ctx.set_zoom_factor(1.0);
+                }
+                let before = self.dark_mode;
+                theme_toggle_button(ui, &mut self.dark_mode);
+                if before != self.dark_mode {
+                    self.save_fields();
                 }
             });
         });
@@ -1144,6 +1395,10 @@ impl DevicesApp {
                 self.spawn_plug(Some(false));
             }
         });
+        let history: Vec<(String, f64)> = self.power_history.iter().cloned().collect();
+        if history.len() >= 2 {
+            spark_chart(ui, "Power history (W)", "W", &history, ENERGY);
+        }
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for card in self.plug_cards.clone() {
@@ -1278,6 +1533,9 @@ impl DevicesApp {
                 value_rows(ui, &card);
             });
         }
+        if let Some(samples) = self.wx_hourly() {
+            spark_chart(ui, "Next 24h temperature", "°C", &samples, SKY);
+        }
     }
 
     fn spawn_netatmo(&mut self) {
@@ -1317,6 +1575,26 @@ impl DevicesApp {
             Some(auth) => (auth.username.clone(), auth.password.clone()),
             None => (None, None),
         }
+    }
+
+    /// Next-24h temperature series from the weather card's hourly arrays.
+    /// Defensive at every step: malformed entries are skipped, never fatal.
+    fn wx_hourly(&self) -> Option<Vec<(String, f64)>> {
+        let hourly = self.wx_card.as_ref()?.get("hourly")?;
+        let times = hourly.get("time")?.as_array()?;
+        let temps = hourly.get("temperature_2m")?.as_array()?;
+        let mut out = Vec::new();
+        for (time, temp) in times.iter().zip(temps.iter()).take(24) {
+            let label = time
+                .as_str()
+                .and_then(|t| t.split('T').nth(1))
+                .and_then(|h| h.get(..5))
+                .unwrap_or("?")
+                .to_string();
+            out.push((label, temp.as_f64().unwrap_or(f64::NAN)));
+        }
+        out.retain(|(_, v)| v.is_finite());
+        (!out.is_empty()).then_some(out)
     }
 
     fn spawn_weather_latlon(&mut self, lat: Option<f64>, lon: Option<f64>) {
@@ -1579,6 +1857,28 @@ mod parity_tests {
             ui.label("18.7 °C · 42.5 × 2 — querying…");
         });
         harness.run();
+    }
+
+    /// Self-scan: the render test above only covers what it renders — this
+    /// covers the whole file. Any non-ASCII char outside the verified set
+    /// fails `cargo test` (per the fleet standard's tofu guard).
+    #[test]
+    fn glyph_source_scan() {
+        const ALLOWED: &[char] = &['°', '×', '·', '…', '—'];
+        let source = include_str!("app.rs");
+        let mut offenders = Vec::new();
+        for (idx, ch) in source.char_indices() {
+            if !ch.is_ascii() && !ALLOWED.contains(&ch) {
+                offenders.push((idx, ch));
+                if offenders.len() >= 8 {
+                    break;
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "non-allowlisted glyphs in app.rs: {offenders:?}"
+        );
     }
 
     #[test]

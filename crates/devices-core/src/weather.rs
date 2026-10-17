@@ -54,8 +54,9 @@ pub async fn now(
     let url = format!(
         "https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}\
          &current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m\
+         &hourly=temperature_2m,relative_humidity_2m,precipitation_probability\
          &daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max\
-         &timezone=auto"
+         &forecast_days=1&timezone=auto"
     );
     let resp = with_timeout_secs("weather.now", 15, http.get(&url).send())
         .await?
@@ -99,6 +100,7 @@ pub async fn now(
             "min_c": first("temperature_2m_min"),
             "precipitation_probability_max": first("precipitation_probability_max"),
         },
+        "hourly": body.get("hourly"),
     }))
 }
 
