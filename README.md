@@ -130,26 +130,43 @@ Or via `just`: `just check`, `just test`, `just run-mcp`, `just run-cli`,
 
 Every command supports `--json` for agent driving without MCP:
 
-| Command | Args | What it does |
+| Command | Key args | What it does |
 |---|---|---|
 | `status` | `--json` | App version, mode, command surface |
-| `plug-stats` | `--device-ip`, `--json` | Wattage (W) + today energy (kWh) |
-| `plug-toggle` | `--device-ip`, `--state true/false`, `--json` | Turn plug on/off |
-| `camera-describe` | `--device-ip`, `--json` | Model, RTSP URL, reachability |
-| `camera-snapshot` | `--device-ip`, `--json` | Snapshot metadata (WxH + bytes, no blob) |
+| `plug-stats` | `--vendor tapo\|kasa\|shelly\|demo`, `--device-ip`, `--username/--password`, `--json` | Real wattage (W) + today energy (kWh) |
+| `plug-toggle` | `--vendor …`, `--device-ip`, `--state true/false`, `--json` | Turn plug on/off |
+| `camera-describe` | `--device-ip`, `--json` | Model, RTSP URL, reachability (shape info) |
+| `camera-snapshot` | `--source tapo\|onvif\|usb\|ring\|url\|demo`, `--device-ip`, `--model`, `--username/--password`, `--onvif-port`, `--device-index`, `--url`, `--out`, `--token-file`, `--json` | Real JPEG frame → file + metadata (never a blob) |
+| `hue-lights` | `--bridge-ip`, `--username`, `--json` | Hue lights (name, on/off, brightness, reachability) |
+| `hue-set-light` | `--light-id`, `--on true/false` (required), `--bri 1-254`, `--json` | Control a Hue light |
+| `hue-pair` | `--bridge-ip` | Link-button pairing, returns username |
+| `netatmo-stations` | `--client-id/--client-secret/--refresh-token`, `--json` | Weather stations + modules |
+| `ring-status` | `--email/--password/--token-file`, `--json` | Auth check + device census |
+| `ring-doorbells` | same | Doorbells + active dings + recent history |
+| `ring-alarm` | `--mode disarmed\|home\|away` (omit = read), `--location-id`, `--json` | Alarm state / arm / disarm (no siren — by design) |
+| `ring-auth` | `--email/--password`, `--json` | First login (may report 2FA pending) |
+| `ring-auth-2fa` | `--code`, `--json` | Complete Ring 2FA |
 | `mcp` | — | MCP 2024-11-05 server on stdio |
 
 ## MCP contract
 
-Five tools, one dispatch loop, zero hardware required for the probe:
+Fourteen tools, one dispatch loop:
 
 | Tool | Params | Returns |
 |---|---|---|
 | `status` | — | version, mode, command list |
-| `plug.get_stats` | `device_ip` | `PowerStats` JSON |
-| `plug.toggle` | `device_ip`, `state` | `{device_ip, state, updated}` |
+| `plug.get_stats` | `vendor`, `device_ip`, `username?`, `password?` | `PowerStats` JSON (real hardware) |
+| `plug.toggle` | `vendor`, `device_ip`, `state`, `username?`, `password?` | `{device_ip, vendor, state, updated}` |
 | `camera.describe` | `device_ip` | `CameraInfo` JSON |
-| `camera.snapshot_meta` | `device_ip` | `SnapshotMeta` JSON |
+| `camera.snapshot` | `source`, `device_ip`, `model?`, `username?`, `password?`, `onvif_port?`, `device_index?`, `url?`, `out_path?`, `token_file?` | Real frame metadata (+ file when `out_path` given) |
+| `hue.list_lights` | `bridge_ip?`, `username?` | Light array |
+| `hue.set_light` | `light_id`, `on` (required), `bri?` | `{light_id, on, updated}` |
+| `hue.pair` | `bridge_ip` | `{username, next}` |
+| `netatmo.stations` | `client_id?`, `client_secret?`, `refresh_token?` | Stations + modules |
+| `ring.status` | `email?`, `password?`, `token_file?` | Device census |
+| `ring.doorbells` | same | Doorbells + dings + history |
+| `ring.alarm` | `mode?`, `location_id?`, … | Alarm state or `{mode, updated}` |
+| `ring.auth` / `ring.auth_2fa` | `email?`, `password?` / `code` | `{authenticated: true, …}` |
 
 Framing rules (the stdio invariant): **stdout is pure JSON-RPC** — every log
 line goes to stderr. Notifications get no reply. Unknown methods → `-32601`,
@@ -159,6 +176,33 @@ bad params default safely, parse failures → `-32700`. Smoke probe:
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | cargo run -q -p rust-devices-mcp -- mcp
 ```
+
+## Live verification (2026-10-17, Sandra's LAN — all read-only)
+
+| Driver | Result |
+|---|---|
+| Hue bridge 192.168.0.236 | ✅ 18 real lights (names, on/off, brightness, reachability) |
+| Ring Front Door | ✅ auth via cached token, doorbells + motion history, 640×360 snapshot |
+| USB webcam (index 0+1) | ✅ real MJPEG frames, 640×480 parsed from SOF0 |
+| Public URL snapshot | ✅ httpbin JPEG 239×178 (devices-mcp's city-webcam URLs are 404 — config rot, not our bug) |
+| Demo vendor/source | ✅ deterministic oracle for CI |
+| Tapo plugs/cams, Kasa, Shelly, Netatmo, ONVIF | ⏳ code-complete + unit-tested, awaiting creds/hardware (no Tapo/Netatmo secrets or Kasa/Shelly devices in this shell) |
+
+Credential fence proven by design: every missing secret yields a typed Auth
+error naming the exact env var — verified live for ONVIF, Tapo, and Ring-expired paths.
+
+## Credentials (explicit args win, env is the fallback, secrets never logged)
+
+| Vendor | Env vars |
+|---|---|
+| Tapo plugs | `TAPO_EMAIL` (or `TAPO_USERNAME`) + `TAPO_PASSWORD` |
+| Tapo cameras | above (handshake) + `CAMERA_USERNAME`/`CAMERA_PASSWORD` (or `TAPO_CAMERA_*`) |
+| Kasa | `KASA_USERNAME` + `KASA_PASSWORD` (legacy XOR needs none) |
+| Shelly | `SHELLY_PASSWORD` (optional, user is `admin`) |
+| Hue | `HUE_BRIDGE_IP` + `HUE_USERNAME` (`HUE_HTTPS=0` for plain HTTP) |
+| Netatmo | `NETATMO_CLIENT_ID` + `NETATMO_CLIENT_SECRET` + `NETATMO_REFRESH_TOKEN` |
+| Ring | `RING_EMAIL` + `RING_PASSWORD` (first login/2FA) or `RING_REFRESH_TOKEN` / `RING_TOKEN_FILE` (default `ring_token.cache`) |
+| ONVIF | `CAMERA_USERNAME` + `CAMERA_PASSWORD`, port via `--onvif-port` (default 2020) |
 
 ## Verification
 
@@ -175,9 +219,10 @@ Last verified 2026-10-17: tests 13/13, clippy clean, fmt clean, stdio probe
 
 | Tier | Scope | State |
 |---|---|---|
-| v0.1 (this) | Command surface, dispatch, CLI+MCP+app shell, deterministic stubs | ✅ Done |
-| Tier-2 | Real Tapo KLAP handshake in `plug.rs` + live-plug oracle test | Next |
-| Tier-3 | Real frame grab in `camera.rs` (metadata stays MCP-safe) | Planned |
+| v0.1 | Command surface, dispatch, CLI+MCP+app shell, deterministic stubs | ✅ Released |
+| Tier-2 (plugs) | Real Tapo (`tapo` crate, P115→P110 fallback), Kasa (XOR→KLAP auto), Shelly (Gen1/Gen2 probe) | ✅ Code-complete; Tapo/Kasa/Shelly await creds/hardware |
+| Tier-2 (vendors) | Hue CLIP v1 + pairing, Netatmo OAuth2, Ring OAuth2+2FA + doorbells + alarms | ✅ Hue + Ring proven live; Netatmo awaits secret |
+| Tier-3 (cameras) | Real frames: tapo/onvif/usb/ring/url; SOF parser; `--out` files, metadata-only MCP | ✅ USB/URL/Ring/demo proven live; Tapo/ONVIF await camera passwords |
 | Tier-4 | Real Tauri crate + `ui/dist`, `package-nsis`, installer size/boot shootout | Planned |
 | Deferred | Vision/OpenCV, voice, Plex, ONVIF, Ring/Nest/Hue, SDR, web dashboard | One `Command` variant each |
 

@@ -14,6 +14,7 @@ devices-core = { path = "../devices-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true

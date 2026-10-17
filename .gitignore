@@ -3,6 +3,9 @@
 # Cargo.lock IS committed (binary workspace: reproducible installs).
 *.bak
 *.bak.*
+# Live credential caches (Ring/Netatmo tokens, Hue pairing) must never commit.
+*.cache
+tokens/
 *.exe
 *.pdb
 .DS_Store
