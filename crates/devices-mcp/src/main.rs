@@ -191,6 +191,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Keyless weather via Open-Meteo (Vienna default)
+    Weather {
+        #[arg(long)]
+        lat: Option<f64>,
+        #[arg(long)]
+        lon: Option<f64>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Complete Ring 2FA after ring-auth reported it pending
     RingAuth2fa {
         #[arg(long)]
@@ -447,6 +456,17 @@ fn tools_list() -> Value {
                     "required": ["code"],
                 },
             },
+            {
+                "name": "weather.now",
+                "description": "Keyless weather via Open-Meteo (Vienna default 48.2082, 16.3738). No account, works out of the box.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "lat": {"type": "number"},
+                        "lon": {"type": "number"},
+                    },
+                },
+            },
         ]
     })
 }
@@ -587,6 +607,10 @@ fn call_tool(name: &str, args: &Value) -> Value {
             password,
             token_file,
         }),
+        "weather.now" => run(Command::Weather {
+            latitude: args.get("lat").and_then(|v| v.as_f64()),
+            longitude: args.get("lon").and_then(|v| v.as_f64()),
+        }),
         _ => return wrap_err(format!("unknown tool: {name}")),
     };
     wrap_ok(value)
@@ -607,7 +631,7 @@ fn main() {
             show(
                 run(Command::Status),
                 as_json,
-                "rust-devices-mcp v0.2.0-dev - pure Rust, CLI-first",
+                "rust-devices-mcp v0.2.0 - pure Rust, CLI-first",
             );
         }
         Commands::PlugStats {
@@ -750,6 +774,20 @@ fn main() {
                     client_id,
                     client_secret,
                     refresh_token,
+                }),
+                as_json,
+                "",
+            );
+        }
+        Commands::Weather {
+            lat,
+            lon,
+            json: as_json,
+        } => {
+            show(
+                run(Command::Weather {
+                    latitude: lat,
+                    longitude: lon,
                 }),
                 as_json,
                 "",
@@ -928,14 +966,14 @@ mod tests {
     use devices_core::no_creds;
 
     #[test]
-    fn catalog_lists_fourteen_tools() {
+    fn catalog_lists_fifteen_tools() {
         let catalog = tools_list();
         let tools = catalog
             .get("tools")
             .and_then(|t| t.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(tools.len(), 14);
+        assert_eq!(tools.len(), 15);
     }
 
     #[test]
