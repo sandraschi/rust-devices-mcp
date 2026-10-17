@@ -71,6 +71,17 @@ struct Shot {
     texture: Option<egui::TextureHandle>,
 }
 
+struct LiveStream {
+    label: String,
+    worker: tokio::task::JoinHandle<()>,
+    frames: tokio::sync::mpsc::Receiver<devices_core::video::RgbFrame>,
+    texture: Option<egui::TextureHandle>,
+    started: Instant,
+    seen: u64,
+    fps: f64,
+    ended: bool,
+}
+
 const VENDORS: &[&str] = &["tapo", "kasa", "shelly", "demo"];
 const SOURCES: &[&str] = &["usb", "url", "ring", "tapo", "onvif", "demo"];
 const MODES: &[&str] = &["disarmed", "home", "away"];
@@ -114,6 +125,7 @@ pub struct DevicesApp {
     cam_url: String,
     cam_token: String,
     shots: Vec<Shot>,
+    live: Option<LiveStream>,
     // Ring.
     ring_email: String,
     ring_pass: String,
@@ -653,6 +665,7 @@ impl DevicesApp {
             cam_url: String::new(),
             cam_token: env_or("RING_TOKEN_FILE"),
             shots: Vec::new(),
+            live: None,
             ring_email: String::new(),
             ring_pass: String::new(),
             ring_token: env_or("RING_TOKEN_FILE"),
@@ -1753,6 +1766,220 @@ impl DevicesApp {
         (!out.is_empty()).then_some(out)
     }
 
+    fn stop_live(&mut self) {
+        if let Some(live) = self.live.take() {
+            live.worker.abort();
+            self.note("live stream stopped");
+        }
+    }
+
+    fn onvif_port_for(&self, ip: &str) -> u16 {
+        self.fleet
+            .as_ref()
+            .and_then(|fleet| fleet.onvif_cams.iter().find(|cam| cam.ip == ip))
+            .map(|cam| cam.port)
+            .unwrap_or(2020)
+    }
+
+    /// Start live video: RTSP pump for tapo/onvif/rtsp-URLs, snapshot
+    /// poller (~0.5 fps, honest "live-ish") for ring/usb/http/demo.
+    /// One player at a time — starting a new one stops the old.
+    fn start_live(&mut self) {
+        use devices_core::video::{pump_onvif, pump_rtsp, StreamRequest};
+        self.stop_live();
+        let source = match CamSource::parse(&self.cam_source) {
+            Ok(source) => source,
+            Err(e) => {
+                self.note(e.to_string());
+                self.raw = serde_json::json!({"error": e.to_string()}).to_string();
+                return;
+            }
+        };
+        let label = format!("live {} {}", source.as_str(), self.cam_ip.trim());
+        let mut user = Self::opt(&self.cam_user);
+        let mut pass = Self::opt(&self.cam_pass);
+        if user.is_none() {
+            user = import::fleet_secret_any(&["CAMERA_USERNAME", "TAPO_CAMERA_USERNAME"]);
+        }
+        if pass.is_none() {
+            pass = import::fleet_secret_any(&["CAMERA_PASSWORD", "TAPO_CAMERA_PASSWORD"]);
+        }
+        if user.is_none() || pass.is_none() {
+            let (fleet_user, fleet_pass) = self.cam_auth_for(self.cam_ip.trim());
+            if user.is_none() {
+                user = fleet_user;
+            }
+            if pass.is_none() {
+                pass = fleet_pass;
+            }
+        }
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let ip = self.cam_ip.trim().to_string();
+        let worker = match source {
+            CamSource::Tapo => {
+                let (Some(user), Some(pass)) = (user.clone(), pass.clone()) else {
+                    self.note("Tapo live needs camera login (fields or CAMERA_* env)");
+                    return;
+                };
+                self.rt.spawn(async move {
+                    let url = match devices_core::video::tapo_rtsp_url(&ip) {
+                        Ok(url) => url,
+                        Err(_) => return,
+                    };
+                    let _ = pump_rtsp(
+                        StreamRequest {
+                            url,
+                            username: Some(user),
+                            password: Some(pass),
+                        },
+                        tx,
+                    )
+                    .await;
+                })
+            }
+            CamSource::Onvif => {
+                let (Some(user), Some(pass)) = (user.clone(), pass.clone()) else {
+                    self.note("ONVIF live needs camera login (fields or CAMERA_* env)");
+                    return;
+                };
+                let port = self.onvif_port_for(&ip);
+                self.rt.spawn(async move {
+                    let _ = pump_onvif(ip, port, user, pass, tx).await;
+                })
+            }
+            CamSource::Url => {
+                let target = Self::opt(&self.cam_url).unwrap_or_default();
+                if target.starts_with("rtsp://") {
+                    let (user, pass) = (user.clone(), pass.clone());
+                    self.rt.spawn(async move {
+                        let _ = pump_rtsp(
+                            StreamRequest {
+                                url: target,
+                                username: user,
+                                password: pass,
+                            },
+                            tx,
+                        )
+                        .await;
+                    })
+                } else {
+                    self.spawn_poller(source, tx)
+                }
+            }
+            CamSource::Ring | CamSource::Usb | CamSource::Demo => self.spawn_poller(source, tx),
+        };
+        self.live = Some(LiveStream {
+            label: label.clone(),
+            worker,
+            frames: rx,
+            texture: None,
+            started: Instant::now(),
+            seen: 0,
+            fps: 0.0,
+            ended: false,
+        });
+        self.note(format!("{label} starting…"));
+    }
+
+    fn spawn_poller(
+        &self,
+        source: CamSource,
+        tx: tokio::sync::mpsc::Sender<devices_core::video::RgbFrame>,
+    ) -> tokio::task::JoinHandle<()> {
+        let params = (
+            self.cam_ip.trim().to_string(),
+            Self::opt(&self.cam_model),
+            Self::opt(&self.cam_user),
+            Self::opt(&self.cam_pass),
+            self.cam_index.trim().parse().ok(),
+            Self::opt(&self.cam_url),
+            Self::opt(&self.cam_token),
+        );
+        self.rt.spawn(async move {
+            let poller = devices_core::video::SnapshotPoller::new(move || {
+                let (ip, model, user, pass, idx, url, token) = params.clone();
+                async move {
+                    devices_core::camera::snapshot_full(
+                        source, &ip, model, user, pass, None, idx, url, None, None, token,
+                    )
+                    .await
+                    .map(|frame| frame.jpeg)
+                }
+            });
+            let _ = devices_core::video::pump_snapshots(poller, tx).await;
+        })
+    }
+
+    fn poll_live(&mut self, ui: &mut egui::Ui) {
+        if self.live.is_none() {
+            return;
+        }
+        if let Some(live) = self.live.as_mut() {
+            while let Ok(frame) = live.frames.try_recv() {
+                live.seen += 1;
+                let elapsed = live.started.elapsed().as_secs_f64().max(0.1);
+                live.fps = live.seen as f64 / elapsed;
+                let image = egui::ColorImage::from_rgb(
+                    [frame.width as usize, frame.height as usize],
+                    &frame.rgb,
+                );
+                match &mut live.texture {
+                    Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
+                    None => {
+                        live.texture = Some(ui.ctx().load_texture(
+                            &live.label,
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                }
+            }
+            if !live.ended && live.worker.is_finished() {
+                live.ended = true;
+                self.status_line =
+                    "live stream ended (camera closed it or network dropped)".to_string();
+            }
+        }
+        ui.ctx().request_repaint();
+        let (label, fps, seen, tex, ended) = match &self.live {
+            Some(live) => (
+                live.label.clone(),
+                live.fps,
+                live.seen,
+                live.texture.clone(),
+                live.ended,
+            ),
+            None => return,
+        };
+        card_frame(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading(format!("LIVE — {label}"));
+                ui.label(format!("{fps:.1} fps · {seen} frames"));
+                if ended {
+                    ui.colored_label(egui::Color32::from_rgb(255, 150, 150), "ended");
+                }
+            });
+            match &tex {
+                Some(tex) => {
+                    ui.add(egui::Image::new(tex).max_width(640.0));
+                }
+                None => {
+                    ui.spinner();
+                    ui.label("waiting for first frame…");
+                }
+            }
+        });
+        let mut stop = false;
+        ui.horizontal(|ui| {
+            if ui.button("Stop live").clicked() {
+                stop = true;
+            }
+        });
+        if stop {
+            self.stop_live();
+        }
+    }
+
     fn spawn_weather_latlon(&mut self, lat: Option<f64>, lon: Option<f64>) {
         self.note("fetching weather…");
         self.spawn(move || async move {
@@ -1816,6 +2043,16 @@ impl DevicesApp {
                 Self::opt(&self.cam_token),
             );
         }
+        ui.horizontal(|ui| {
+            if primary(ui, "Live").clicked() {
+                self.start_live();
+            }
+            if self.live.is_some() && ui.button("Stop live").clicked() {
+                self.stop_live();
+            }
+            ui.label("RTSP pump for tapo/onvif streams, snapshot poller otherwise.");
+        });
+        self.poll_live(ui);
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
             for shot in &self.shots {
