@@ -268,6 +268,13 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Scan a LAN subnet for devices (ports + Hue/Shelly identification)
+    NetScan {
+        #[arg(long, default_value = "192.168.0")]
+        subnet: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// List models on an OpenAI-compatible server (not Anthropic)
     LlmModels {
         #[arg(long)]
@@ -643,6 +650,17 @@ fn tools_list() -> Value {
                 },
             },
             {
+                "name": "net.scan",
+                "description": "Scan a LAN subnet (192.168.0 or 192.168.0.0/24) for devices: open ports with Hue/Shelly identification where possible.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "subnet": {"type": "string"},
+                    },
+                    "required": ["subnet"],
+                },
+            },
+            {
                 "name": "llm.models",
                 "description": "List models on an OpenAI-compatible server (Ollama/LM Studio/cloud). Anthropic has no such endpoint.",
                 "inputSchema": {
@@ -849,6 +867,9 @@ fn call_tool(name: &str, args: &Value) -> Value {
                 history,
             })
         }
+        "net.scan" => run(Command::NetScan {
+            subnet: opt(args, "subnet").unwrap_or_else(|| "192.168.0".to_string()),
+        }),
         "llm.models" => run(Command::LlmModels {
             provider: opt(args, "provider"),
             base_url: opt(args, "base_url"),
@@ -1203,6 +1224,12 @@ fn main() {
                 "",
             );
         }
+        Commands::NetScan {
+            subnet,
+            json: as_json,
+        } => {
+            show(run(Command::NetScan { subnet }), as_json, "");
+        }
         Commands::LlmModels {
             provider,
             base_url,
@@ -1324,14 +1351,14 @@ mod tests {
     use devices_core::no_creds;
 
     #[test]
-    fn catalog_lists_twentythree_tools() {
+    fn catalog_lists_twentyfour_tools() {
         let catalog = tools_list();
         let tools = catalog
             .get("tools")
             .and_then(|t| t.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(tools.len(), 23);
+        assert_eq!(tools.len(), 24);
     }
 
     #[test]
