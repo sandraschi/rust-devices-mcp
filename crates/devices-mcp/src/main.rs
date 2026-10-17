@@ -235,6 +235,29 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Plug power history from the local SQLite store
+    EnergyHistory {
+        #[arg(long)]
+        device_ip: String,
+        #[arg(long, default_value_t = 24)]
+        hours: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Weather history from the local SQLite store
+    WeatherHistory {
+        #[arg(long, default_value_t = 24)]
+        hours: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Alarm events from the local SQLite store
+    AlarmHistory {
+        #[arg(long, default_value_t = 168)]
+        hours: u32,
+        #[arg(long)]
+        json: bool,
+    },
     /// Complete Ring 2FA after ring-auth reported it pending
     RingAuth2fa {
         #[arg(long)]
@@ -542,6 +565,38 @@ fn tools_list() -> Value {
                     "required": ["url", "title"],
                 },
             },
+            {
+                "name": "energy.history",
+                "description": "Plug wattage history from local SQLite (hours 1-2160). Sampler fills it while the app runs.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "device_ip": {"type": "string"},
+                        "hours": {"type": "integer"},
+                    },
+                    "required": ["device_ip"],
+                },
+            },
+            {
+                "name": "weather.history",
+                "description": "Temperature history from local SQLite (hours 1-2160).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "hours": {"type": "integer"},
+                    },
+                },
+            },
+            {
+                "name": "alarm.history",
+                "description": "Alarm/mode-change events from local SQLite (hours 1-2160).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "hours": {"type": "integer"},
+                    },
+                },
+            },
         ]
     })
 }
@@ -701,6 +756,16 @@ fn call_tool(name: &str, args: &Value) -> Value {
             url: opt(args, "url").unwrap_or_default(),
             title: opt(args, "title").unwrap_or_default(),
             summary: opt(args, "summary"),
+        }),
+        "energy.history" => run(Command::EnergyHistory {
+            device_ip: opt(args, "device_ip").unwrap_or_default(),
+            hours: args.get("hours").and_then(|v| v.as_u64()).unwrap_or(24) as u32,
+        }),
+        "weather.history" => run(Command::WeatherHistory {
+            hours: args.get("hours").and_then(|v| v.as_u64()).unwrap_or(24) as u32,
+        }),
+        "alarm.history" => run(Command::AlarmHistory {
+            hours: args.get("hours").and_then(|v| v.as_u64()).unwrap_or(168) as u32,
         }),
         _ => return wrap_err(format!("unknown tool: {name}")),
     };
@@ -1002,6 +1067,29 @@ fn main() {
                 "",
             );
         }
+        Commands::EnergyHistory {
+            device_ip,
+            hours,
+            json: as_json,
+        } => {
+            show(
+                run(Command::EnergyHistory { device_ip, hours }),
+                as_json,
+                "",
+            );
+        }
+        Commands::WeatherHistory {
+            hours,
+            json: as_json,
+        } => {
+            show(run(Command::WeatherHistory { hours }), as_json, "");
+        }
+        Commands::AlarmHistory {
+            hours,
+            json: as_json,
+        } => {
+            show(run(Command::AlarmHistory { hours }), as_json, "");
+        }
         Commands::RingAuth2fa {
             code,
             email,
@@ -1107,14 +1195,14 @@ mod tests {
     use devices_core::no_creds;
 
     #[test]
-    fn catalog_lists_eighteen_tools() {
+    fn catalog_lists_twentyone_tools() {
         let catalog = tools_list();
         let tools = catalog
             .get("tools")
             .and_then(|t| t.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(tools.len(), 18);
+        assert_eq!(tools.len(), 21);
     }
 
     #[test]

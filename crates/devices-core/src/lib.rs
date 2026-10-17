@@ -52,6 +52,9 @@ pub const CMD_WEATHER: &str = "weather.now";
 pub const CMD_BRIDGE_EVENT: &str = "bridge.event";
 pub const CMD_BRIDGE_SPEAK: &str = "bridge.speak";
 pub const CMD_BRIDGE_WEBHOOK: &str = "bridge.webhook";
+pub const CMD_ENERGY_HISTORY: &str = "energy.history";
+pub const CMD_WEATHER_HISTORY: &str = "weather.history";
+pub const CMD_ALARM_HISTORY: &str = "alarm.history";
 
 /// `None` credentials (rely on env) for terse call sites.
 pub fn no_creds() -> Credentials {
@@ -156,6 +159,16 @@ pub enum Command {
         title: String,
         summary: Option<String>,
     },
+    EnergyHistory {
+        device_ip: String,
+        hours: u32,
+    },
+    WeatherHistory {
+        hours: u32,
+    },
+    AlarmHistory {
+        hours: u32,
+    },
 }
 
 fn encode<T: serde::Serialize>(op: &str, result: Result<T, error::DeviceError>) -> Value {
@@ -183,6 +196,7 @@ pub async fn dispatch(cmd: Command) -> Value {
                 CMD_RING_STATUS, CMD_RING_DOORBELLS, CMD_RING_ALARM,
                 CMD_RING_AUTH, CMD_RING_AUTH_2FA, CMD_WEATHER,
                 CMD_BRIDGE_EVENT, CMD_BRIDGE_SPEAK, CMD_BRIDGE_WEBHOOK,
+                CMD_ENERGY_HISTORY, CMD_WEATHER_HISTORY, CMD_ALARM_HISTORY,
             ],
             "agent_contract": "CLI-first: every command supports --json; `mcp` subcommand mirrors the same dispatch over stdio",
         }),
@@ -346,6 +360,51 @@ pub async fn dispatch(cmd: Command) -> Value {
             "bridge.webhook",
             bridge::webhook(&url, &title, summary).await,
         ),
+        Command::EnergyHistory { device_ip, hours } => {
+            let hours = valid_hours(hours);
+            match hours {
+                Ok(hours) => {
+                    match devices_store::query_energy(&device_ip, hours, 500) {
+                        Ok(rows) => rows
+                            .into_iter()
+                            .map(|(ts, watts)| serde_json::json!({"ts": ts, "watts": watts}))
+                            .collect::<Vec<_>>()
+                            .into(),
+                        Err(e) => serde_json::json!({"error": e}),
+                    }
+                }
+                Err(e) => serde_json::json!({"error": e.to_string()}),
+            }
+        }
+        Command::WeatherHistory { hours } => match valid_hours(hours) {
+            Ok(hours) => match devices_store::query_weather(hours, 500) {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|(ts, temp)| serde_json::json!({"ts": ts, "temp_c": temp}))
+                    .collect::<Vec<_>>()
+                    .into(),
+                Err(e) => serde_json::json!({"error": e}),
+            },
+            Err(e) => serde_json::json!({"error": e.to_string()}),
+        },
+        Command::AlarmHistory { hours } => match valid_hours(hours) {
+            Ok(hours) => match devices_store::query_alarms(hours, 100) {
+                Ok(rows) => serde_json::Value::Array(rows),
+                Err(e) => serde_json::json!({"error": e}),
+            },
+            Err(e) => serde_json::json!({"error": e.to_string()}),
+        },
+    }
+}
+
+/// History window guard: 1h..=90d. Anything else is caller error, typed.
+fn valid_hours(hours: u32) -> Result<u32, error::DeviceError> {
+    if (1..=2160).contains(&hours) {
+        Ok(hours)
+    } else {
+        Err(error::DeviceError::InvalidInput(format!(
+            "hours must be 1..=2160, got {hours}"
+        )))
     }
 }
 
@@ -371,7 +430,7 @@ mod tests {
             .and_then(|c| c.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(cmds.len(), 18);
+        assert_eq!(cmds.len(), 21);
     }
 
     #[tokio::test]
