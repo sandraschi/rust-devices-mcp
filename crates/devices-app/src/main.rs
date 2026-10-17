@@ -27,7 +27,7 @@ fn main() -> eframe::Result<()> {
         }
     };
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("Devices (Rust) v0.3")
+        .with_title("Devices (Rust) v0.4")
         .with_inner_size([1280.0, 860.0])
         .with_min_inner_size([900.0, 600.0]);
     if let Some(icon) = load_icon() {
