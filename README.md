@@ -25,10 +25,10 @@ template that proves the Rust-only path before it rolls out to the other
 
 | | `devices-mcp` (Python/FastMCP) | `rust-devices-mcp` (this repo) |
 |---|---|---|
-| MCP server binary | ~150 MB bundled interpreter (typical) | **0.81 MB** (measured, release) |
-| Desktop backend caller | Python sidecar process | **0.19 MB** (measured, release) |
+| MCP server binary | ~150 MB bundled interpreter (typical) | **11.5 MB** (measured, release — driver + TLS stack) |
+| Desktop app | Python sidecar + WebView2 (250–500 MB RAM) | **31 MB** self-contained egui exe, no WebView2 |
 | Cold CLI boot | 2–4 s typical (interpreter + imports) | **~50–70 ms** (measured, Win11 release) |
-| NSIS installer | 120 MB+ typical | ~8–15 MB (projected, tier-4 Tauri) |
+| NSIS installer | 120 MB+ typical | **16.8 MB** (measured, hand-written script, current-user) |
 | MCP transport | FastMCP over stdio | MCP 2024-11-05 over stdio, hand-rolled framing |
 | Agent contract | FastMCP tool decorators | CLI `--json` flags **plus** MCP tools — same dispatch |
 
@@ -226,13 +226,13 @@ users set the env vars below instead.
 ## Verification
 
 ```powershell
-cargo test --workspace                                          # 13/13 green
+cargo test --workspace                                          # 37/37 green
 cargo clippy --workspace --all-targets --all-features -- -D warnings  # clean
 cargo fmt --all --check                                         # clean
 ```
 
-Last verified 2026-10-17: tests 13/13, clippy clean, fmt clean, stdio probe
-(init/list/2×call) OK, release bins 0.81 + 0.19 MB, cold boot ~50–70 ms.
+Last verified 2026-10-17: tests 37/37, clippy clean, fmt clean, stdio probe
+(init/list/2×call) OK, release bins 11.5 + 31 MB + 16.8 MB installer, cold boot ~50–70 ms.
 
 ## Scorecard (where the stubs are)
 

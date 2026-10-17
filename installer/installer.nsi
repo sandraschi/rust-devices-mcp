@@ -1,11 +1,11 @@
-; Devices (Rust) v0.2.0 — current-user installer (no admin, no UAC).
+; Devices (Rust) v0.3.0 — current-user installer (no admin, no UAC).
 ; Built with NSIS 3 (makensis installer/installer.nsi, CWD = repo root).
 ; Installs the egui dashboard + the CLI/MCP server side by side.
 
 !include "MUI2.nsh"
 
-Name "Devices (Rust) 0.2.0"
-OutFile "..\target\release\bundle\Devices-Rust-0.2.0-setup.exe"
+Name "Devices (Rust) 0.3.0"
+OutFile "..\target\release\bundle\Devices-Rust-0.3.0-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\rust-devices-mcp"
 RequestExecutionLevel user
 
@@ -21,13 +21,13 @@ Section "Binaries" SecBinaries
   File "..\target\release\rust-devices-mcp.exe"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\rust-devices-mcp" \
-    "DisplayName" "Devices (Rust) 0.2.0"
+    "DisplayName" "Devices (Rust) 0.3.0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\rust-devices-mcp" \
     "UninstallString" "$INSTDIR\uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\rust-devices-mcp" \
     "DisplayIcon" "$INSTDIR\devices-app.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\rust-devices-mcp" \
-    "DisplayVersion" "0.2.0"
+    "DisplayVersion" "0.3.0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\rust-devices-mcp" \
     "Publisher" "sandraschi"
 SectionEnd

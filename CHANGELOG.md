@@ -3,6 +3,23 @@
 > Project status: **ALPHA** (2026-10-17). What's live vs. stub is tracked in
 > README's verification table and docs/PRD.md — this log records changes only.
 
+## v0.3.0 (2026-10-17) - fleet import, NSIS, UI polish, live proofs
+
+- Fleet import (`import.rs`, operator-permitted): plugs, Hue, ONVIF/tapo
+  cameras with per-camera logins, Ring token path, Netatmo triple, USB index
+  from the devices-mcp checkout; readonly-plug toggle guard; per-device env
+  names (`TAPO_P115_*`, `TAPO_LIGHTING_*`, `TAPO_CAMERA_2_*`,
+  `HUE_BRIDGE_USERNAME`); live-oracle tests against the real config.
+- Live proofs: Tapo plugs (15.7 W / 290 W — caught an mW→W unit bug),
+  Tapo cam 640x360, Netatmo station, Hue 18 lights, Ring doorbell+snapshot,
+  USB 640x480. ONVIF-generic documented quirk (Tapo faults GetSnapshotUri).
+- UI polish per fleet canon: Ctrl+wheel zoom + pill (persisted), light/dark
+  switcher with vector sun/moon, hairlines + outlines, accent stripes,
+  zero-dep GPU spark charts (power history, 24h temperature via new
+  Open-Meteo hourly payload), self-scanning glyph guard.
+- Hand-written NSIS installer (current-user, Start Menu, uninstaller).
+- UI parity flow doc, PRD, alpha marking, kittest goldens (3).
+
 ## v0.2.0 (2026-10-17) - real drivers (tier-2 + tier-3) + egui dashboard + keyless weather
 
 - Plugs for ALL vendors: Tapo P100/P105/P110/P115 (`tapo` crate, P115→P110
