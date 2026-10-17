@@ -3,6 +3,18 @@
 > Project status: **ALPHA** (2026-10-17). What's live vs. stub is tracked in
 > README's verification table and docs/PRD.md — this log records changes only.
 
+## Unreleased - live RTSP video (no ffmpeg)
+
+- `video.rs`: retina RTSP session (describe/setup/play/demux) + openh264
+  decode + Annex-B framing converter, feeding RGB frames to the UI player.
+  Proven live: 3 decoded frames in 0.46s from a Tapo camera (orchard: the
+  first attempt failed on retina's "URL must not contain credentials" —
+  login travels via session options, and ONVIF URIs get stripped).
+- UI: Live/Stop player on the Cameras page (RTSP pump for tapo/onvif
+  streams, ~0.5 fps snapshot poller for ring/usb/url/demo), FPS counter,
+  texture reuse via `TextureHandle::set`.
+- openh264 builds sans-NASM on MSVC (bundled source; NASM only accelerates).
+
 ## v0.3.0 (2026-10-17) - fleet import, NSIS, UI polish, live proofs
 
 - Fleet import (`import.rs`, operator-permitted): plugs, Hue, ONVIF/tapo

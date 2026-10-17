@@ -20,6 +20,10 @@ nokhwa = { workspace = true }
 image = { workspace = true }
 nokhwa-core = { workspace = true }
 serde_yaml = { workspace = true }
+retina = { workspace = true }
+openh264 = { workspace = true }
+futures = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true
