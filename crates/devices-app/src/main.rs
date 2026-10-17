@@ -18,6 +18,7 @@ mod registry;
 mod vault;
 
 fn main() -> eframe::Result<()> {
+    eprintln!("DBG main start");
     if std::env::args().any(|arg| arg == "--smoke") {
         return app::smoke();
     }
@@ -28,6 +29,7 @@ fn main() -> eframe::Result<()> {
             std::process::exit(1);
         }
     };
+    eprintln!("DBG runtime built");
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Devices (Rust) v0.4")
         .with_inner_size([1280.0, 860.0])
@@ -39,10 +41,16 @@ fn main() -> eframe::Result<()> {
         viewport,
         ..Default::default()
     };
+    eprintln!("DBG entering run_native");
     eframe::run_native(
         "Devices (Rust)",
         options,
-        Box::new(move |ctx| Ok(Box::new(app::DevicesApp::new(ctx, runtime)))),
+        Box::new(move |ctx| {
+            eprintln!("DBG creator: building app");
+            let app = app::DevicesApp::new(ctx, runtime);
+            eprintln!("DBG creator: app built");
+            Ok(Box::new(app))
+        }),
     )
 }
 

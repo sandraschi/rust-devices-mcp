@@ -72,6 +72,13 @@ enum Job {
     },
     Ring(Value),
     Bridge(Value),
+    VaultLoaded {
+        tapo_pass: Option<String>,
+        cam_pass: Option<String>,
+        ring_pass: Option<String>,
+        chat_key: Option<String>,
+        note: String,
+    },
     Scan(Value),
     Chat(Value),
     ChatContext(String),
@@ -728,7 +735,8 @@ impl DevicesApp {
             alarm_location: String::new(),
         };
         app.load_fields();
-        app.load_vault();
+        app.vault_note = "loading OS vault…".to_string();
+        app.spawn_vault_load();
         app.registry = crate::registry::load();
         apply_theme(&ctx.egui_ctx, app.dark_mode);
         ctx.egui_ctx.set_zoom_factor(app.zoom_saved);
@@ -962,6 +970,36 @@ impl DevicesApp {
                         self.note("scan failed — see Raw JSON");
                     }
                 }
+                Job::VaultLoaded {
+                    tapo_pass,
+                    cam_pass,
+                    ring_pass,
+                    chat_key,
+                    note,
+                } => {
+                    // Fill only empty fields (typed values win over vault).
+                    if self.plug_pass.trim().is_empty() {
+                        if let Some(secret) = tapo_pass {
+                            self.plug_pass = secret;
+                        }
+                    }
+                    if self.cam_pass.trim().is_empty() {
+                        if let Some(secret) = cam_pass {
+                            self.cam_pass = secret;
+                        }
+                    }
+                    if self.ring_pass.trim().is_empty() {
+                        if let Some(secret) = ring_pass {
+                            self.ring_pass = secret;
+                        }
+                    }
+                    if self.chat_key.trim().is_empty() {
+                        if let Some(secret) = chat_key {
+                            self.chat_key = secret;
+                        }
+                    }
+                    self.vault_note = note;
+                }
                 Job::Ring(value) => {
                     self.show_raw(&value);
                     if let Some(list) = value.get("doorbells").and_then(|v| v.as_array()) {
@@ -1058,44 +1096,6 @@ impl DevicesApp {
                 ""
             }
         ));
-    }
-
-    /// OS-vault secrets into session fields (boot only). Missing vault =
-    /// session-only mode with a note; never a crash, never a log line.
-    fn load_vault(&mut self) {
-        let mut loaded = 0u32;
-        let mut missing_vault = false;
-        let mut pull = |slot: &str, slot_field: &mut String| match crate::vault::get(slot) {
-            Ok(Some(secret)) if slot_field.trim().is_empty() => {
-                *slot_field = secret;
-                true
-            }
-            Ok(_) => false,
-            Err(_) => {
-                missing_vault = true;
-                false
-            }
-        };
-        // Borrow dance: pull() takes &mut field; call per field.
-        if pull(crate::vault::TAPO_PASSWORD, &mut self.plug_pass) {
-            loaded += 1;
-        }
-        if pull(crate::vault::CAMERA_PASSWORD, &mut self.cam_pass) {
-            loaded += 1;
-        }
-        if pull(crate::vault::RING_PASSWORD, &mut self.ring_pass) {
-            loaded += 1;
-        }
-        if pull(crate::vault::LLM_API_KEY, &mut self.chat_key) {
-            loaded += 1;
-        }
-        self.vault_note = if missing_vault {
-            "OS vault unavailable — secrets are session-only this run.".to_string()
-        } else if loaded > 0 {
-            format!("{loaded} secrets loaded from the OS vault.")
-        } else {
-            "OS vault reachable — no secrets stored yet (see Settings).".to_string()
-        };
     }
 
     fn save_secret(&mut self, slot: &str, secret: &str) {
@@ -1527,10 +1527,12 @@ impl eframe::App for DevicesApp {
         // Input diagnostics (Help page): updated every frame so a human can
         // read what the wheel is doing live. If these never move, wheel
         // events aren't reaching egui at all (backend/focus issue, not UI).
+        // zoom_factor() takes its own lock — read it OUTSIDE input()'s
+        // write lock, or the threads wed (10s deadlock panic, caught live).
+        let zoom = ctx.zoom_factor();
         self.diag_line = ctx.input(|input| {
             format!(
-                "zoom={:.2} scrolling={} smooth=({:.1},{:.1}) mods[ctrl={} shift={} alt={}]",
-                ctx.zoom_factor(),
+                "zoom={zoom:.2} scrolling={} smooth=({:.1},{:.1}) mods[ctrl={} shift={} alt={}]",
                 input.is_scrolling(),
                 input.smooth_scroll_delta().x,
                 input.smooth_scroll_delta().y,
@@ -2336,6 +2338,60 @@ impl DevicesApp {
         self.note(format!("scanning {subnet} (~15s)…"));
         self.scan_results.clear();
         self.spawn(move || async move { Job::Scan(dispatch(Command::NetScan { subnet }).await) });
+    }
+
+    /// Vault read on a worker thread (see load rationale): first-use OS
+    /// consent UI can block, and boot must never wait for it.
+    fn spawn_vault_load(&mut self) {
+        self.spawn(move || async move {
+            let loaded = tokio::task::spawn_blocking(|| {
+                let mut loaded = 0u32;
+                let mut failed = false;
+                let mut pull = |slot: &str| -> Option<String> {
+                    match crate::vault::get(slot) {
+                        Ok(secret) => {
+                            if secret.is_some() {
+                                loaded += 1;
+                            }
+                            secret
+                        }
+                        Err(_) => {
+                            failed = true;
+                            None
+                        }
+                    }
+                };
+                let got = (
+                    pull(crate::vault::TAPO_PASSWORD),
+                    pull(crate::vault::CAMERA_PASSWORD),
+                    pull(crate::vault::RING_PASSWORD),
+                    pull(crate::vault::LLM_API_KEY),
+                );
+                let note = if failed {
+                    "OS vault unavailable — secrets are session-only this run.".to_string()
+                } else if loaded > 0 {
+                    format!("{loaded} secrets loaded from the OS vault.")
+                } else {
+                    "OS vault reachable — no secrets stored yet (see Settings).".to_string()
+                };
+                (got, note)
+            })
+            .await
+            .unwrap_or_else(|_| {
+                (
+                    (None, None, None, None),
+                    "OS vault worker failed — session-only.".to_string(),
+                )
+            });
+            let ((tapo, cam, ring, llm), note) = loaded;
+            Job::VaultLoaded {
+                tapo_pass: tapo,
+                cam_pass: cam,
+                ring_pass: ring,
+                chat_key: llm,
+                note,
+            }
+        });
     }
 
     fn spawn_weather_latlon(&mut self, lat: Option<f64>, lon: Option<f64>) {
