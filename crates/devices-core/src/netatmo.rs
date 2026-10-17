@@ -19,7 +19,7 @@ fn clean(value: Option<String>) -> Option<String> {
 }
 
 fn env_non_empty(name: &str) -> Option<String> {
-    clean(std::env::var(name).ok())
+    clean(std::env::var(name).ok()).or_else(|| crate::import::fleet_secret(name))
 }
 
 fn http_client() -> Result<reqwest::Client, DeviceError> {

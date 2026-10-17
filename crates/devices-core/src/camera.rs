@@ -107,6 +107,7 @@ fn env_non_empty(name: &str) -> Option<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+        .or_else(|| crate::import::fleet_secret(name))
 }
 
 /// JPEG SOI magic — every source must produce real JPEG bytes.

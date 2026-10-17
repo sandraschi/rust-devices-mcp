@@ -20,6 +20,7 @@ nokhwa = { workspace = true }
 image = { workspace = true }
 nokhwa-core = { workspace = true }
 serde_yaml = { workspace = true }
+devices-store = { path = "../devices-store" }
 retina = { workspace = true }
 openh264 = { workspace = true }
 futures = { workspace = true }
