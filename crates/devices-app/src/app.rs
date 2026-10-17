@@ -96,6 +96,7 @@ pub struct DevicesApp {
     tx: mpsc::Sender<Job>,
     rx: mpsc::Receiver<Job>,
     pending: usize,
+    diag_line: String,
     fleet: Option<FleetImport>,
     dark_mode: bool,
     zoom_saved: f32,
@@ -248,22 +249,13 @@ fn apply_theme(ctx: &egui::Context, dark_mode: bool) {
     );
 }
 
-/// Ctrl+MouseWheel global zoom (Ctrl+Plus/Minus/0 work automatically).
+/// Ctrl+MouseWheel global zoom via egui's own zoom delta (the sanctioned
+/// path — `zoom_delta()` is computed from Ctrl+wheel by the input layer).
+/// Ctrl+Plus/Minus/0 work automatically.
 fn handle_zoom(ctx: &egui::Context) {
-    let scroll_y = ctx.input(|input| {
-        if input.modifiers.ctrl || input.modifiers.command {
-            input.smooth_scroll_delta.y
-        } else {
-            0.0
-        }
-    });
-    if scroll_y.abs() > 0.0 {
-        let step = if scroll_y > 0.0 {
-            1.1_f32
-        } else {
-            1.0 / 1.1_f32
-        };
-        ctx.set_zoom_factor((ctx.zoom_factor() * step).clamp(0.6, 2.5));
+    let zoom = ctx.input(|input| input.zoom_delta());
+    if (zoom - 1.0).abs() > f32::EPSILON {
+        ctx.set_zoom_factor((ctx.zoom_factor() * zoom).clamp(0.6, 2.5));
     }
 }
 
@@ -648,6 +640,7 @@ impl DevicesApp {
             tx,
             rx,
             pending: 0,
+            diag_line: "diagnostics warming up…".to_string(),
             fleet: None,
             dark_mode: true,
             zoom_saved: 1.0,
@@ -1394,6 +1387,21 @@ impl eframe::App for DevicesApp {
         let ctx = ui.ctx().clone();
         self.drain(&ctx);
         handle_zoom(&ctx);
+        // Input diagnostics (Help page): updated every frame so a human can
+        // read what the wheel is doing live. If these never move, wheel
+        // events aren't reaching egui at all (backend/focus issue, not UI).
+        self.diag_line = ctx.input(|input| {
+            format!(
+                "zoom={:.2} scrolling={} smooth=({:.1},{:.1}) mods[ctrl={} shift={} alt={}]",
+                ctx.zoom_factor(),
+                input.is_scrolling(),
+                input.smooth_scroll_delta().x,
+                input.smooth_scroll_delta().y,
+                input.modifiers.ctrl,
+                input.modifiers.shift,
+                input.modifiers.alt,
+            )
+        });
         if (ctx.zoom_factor() - self.zoom_saved).abs() > f32::EPSILON {
             self.zoom_saved = ctx.zoom_factor();
             self.save_fields();
@@ -2301,6 +2309,11 @@ impl DevicesApp {
 
     fn page_help(&mut self, ui: &mut egui::Ui) {
         ui.heading("Help");
+        card_frame(ui, |ui| {
+            ui.heading("Mouse & zoom diagnostics (live)");
+            ui.monospace(self.diag_line.clone());
+            ui.label("Wheel over this window: smooth= should twitch. Hold Ctrl and wheel: zoom= should move. If nothing ever changes, wheel events are not reaching the app — report that exact sentence.");
+        });
         card_frame(ui, |ui| {
             ui.heading("First run (zero typing on a fleet machine)");
             ui.label("1. The app imports plugs, Hue, cameras, Ring and Netatmo from the devices-mcp checkout automatically.");

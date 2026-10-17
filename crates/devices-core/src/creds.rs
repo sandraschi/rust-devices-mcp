@@ -118,10 +118,13 @@ impl Credentials {
 }
 
 fn env_non_empty(name: &str) -> Option<String> {
+    // Process env first, devices-mcp `.env` second (operator-permitted
+    // fleet import) — so the CLI works with zero setup on fleet machines.
     std::env::var(name)
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+        .or_else(|| crate::import::fleet_secret(name))
 }
 
 /// Shared vendor-error classifier: timeout/auth/unsupported/protocol from
@@ -178,9 +181,23 @@ mod tests {
     }
 
     #[test]
-    fn tapo_without_account_is_typed_auth_error() {
-        let result = Credentials::resolve(Vendor::Tapo, None, None);
-        assert!(matches!(result, Err(DeviceError::Auth(_))));
+    fn tapo_explicit_account_always_resolves() {
+        // Machine-independent: explicit args must win regardless of what
+        // the operator's env or fleet checkout contains (a previous version
+        // asserted the no-creds error, which fails on machines WITH creds —
+        // exactly the wrong coupling for a unit test).
+        let creds = Credentials::resolve(
+            Vendor::Tapo,
+            Some("me@example.com".to_string()),
+            Some("secret".to_string()),
+        )
+        .unwrap_or_default();
+        assert_eq!(creds.username.as_deref(), Some("me@example.com"));
+        let (user, pass) = creds
+            .require_tapo_account()
+            .unwrap_or((String::new(), String::new()));
+        assert_eq!(user, "me@example.com");
+        assert_eq!(pass, "secret");
     }
 
     #[test]
