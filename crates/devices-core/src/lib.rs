@@ -19,6 +19,7 @@ pub mod camera;
 pub mod creds;
 pub mod error;
 pub mod hue;
+pub mod import;
 pub mod netatmo;
 pub mod plug;
 pub mod plug_kasa;

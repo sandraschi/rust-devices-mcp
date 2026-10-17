@@ -19,6 +19,7 @@ oxvif = { workspace = true }
 nokhwa = { workspace = true }
 image = { workspace = true }
 nokhwa-core = { workspace = true }
+serde_yaml = { workspace = true }
 
 [lints]
 workspace = true
