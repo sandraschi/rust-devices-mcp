@@ -39,6 +39,11 @@
 - UI parity flow (`docs/UI_PARITY.md`): oracle screenshots → egui clone →
   kittest golden snapshots + glyph-allowlist guard (egui 0.37 bundles only
   Ubuntu-Light + egui-icons; status dots are painted, never glyphs).
+- Fleet-standard polish: Ctrl+wheel zoom + zoom pill (persisted), light/dark
+  theme switcher with vector sun/moon, hairline separators, button outlines,
+  accent stripes on KPI cards, zero-dep GPU spark charts (power history +
+  24h temperature curve via new Open-Meteo hourly payload), self-scanning
+  glyph guard (`include_str!`) stronger than the render guard.
 
 ## 2026-10-17 - v0.1.0 scaffold (ArtCraft pilot)
 
