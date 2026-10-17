@@ -44,8 +44,10 @@ pub async fn get_stats(device_ip: &str, creds: &Credentials) -> Result<PowerStat
         .await?
         .map_err(|e| map_tapo(format!("energy_usage: {e}")))?;
 
+    // Units per the crate's own docs: EnergyUsageResult.current_power is
+    // MILLIWATTS, while the get_current_power fallback reports Watts.
     let watts = match usage.current_power {
-        Some(w) => w as f32,
+        Some(milliwatts) => milliwatts as f32 / 1000.0,
         None => {
             let current = with_timeout("tapo.current_power", device.get_current_power())
                 .await?

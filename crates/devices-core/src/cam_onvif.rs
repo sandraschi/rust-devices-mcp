@@ -27,17 +27,43 @@ pub async fn grab(
     let profiles = with_timeout_secs("onvif.profiles", 20, session.get_profiles())
         .await?
         .map_err(|e| classify_vendor_error(format!("onvif profiles: {e}")))?;
-    let token = profiles
-        .first()
-        .map(|p| p.token.clone())
-        .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| {
-            DeviceError::Unsupported("onvif: camera returned no media profiles".to_string())
-        })?;
-
-    let snap = with_timeout_secs("onvif.snapshot_uri", 20, session.get_snapshot_uri(&token))
-        .await?
-        .map_err(|e| classify_vendor_error(format!("onvif snapshot_uri: {e}")))?;
+    if profiles.is_empty() {
+        return Err(DeviceError::Unsupported(
+            "onvif: camera returned no media profiles".to_string(),
+        ));
+    }
+    // Some firmwares fault GetSnapshotUri on non-video profiles — try each.
+    // Observed 2026-10-17: Tapo cameras authenticate fine but fault
+    // GetSnapshotUri on EVERY profile with an empty Receiver fault (their
+    // ONVIF is streaming-only). Tapo hardware should use --source tapo
+    // (native protocol, proven live); this path stays for generic ONVIF.
+    let mut last_err =
+        DeviceError::Unsupported("onvif: no profile produced a snapshot URI".to_string());
+    let mut snapshot_uri = None;
+    for profile in &profiles {
+        if profile.token.trim().is_empty() {
+            continue;
+        }
+        match with_timeout_secs(
+            "onvif.snapshot_uri",
+            20,
+            session.get_snapshot_uri(&profile.token),
+        )
+        .await
+        {
+            Ok(Ok(snap)) => {
+                snapshot_uri = Some(snap);
+                break;
+            }
+            Ok(Err(e)) => {
+                last_err = classify_vendor_error(format!("onvif snapshot_uri: {e}"));
+            }
+            Err(e) => {
+                last_err = e;
+            }
+        }
+    }
+    let snap = snapshot_uri.ok_or(last_err)?;
 
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))

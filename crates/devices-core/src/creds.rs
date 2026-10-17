@@ -64,8 +64,13 @@ impl Credentials {
         let clean = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let (env_user, env_pass) = match vendor {
             Vendor::Tapo => (
-                env_non_empty("TAPO_EMAIL").or_else(|| env_non_empty("TAPO_USERNAME")),
-                env_non_empty("TAPO_PASSWORD"),
+                env_non_empty("TAPO_EMAIL")
+                    .or_else(|| env_non_empty("TAPO_USERNAME"))
+                    .or_else(|| env_non_empty("TAPO_P115_EMAIL"))
+                    .or_else(|| env_non_empty("TAPO_LIGHTING_EMAIL")),
+                env_non_empty("TAPO_PASSWORD")
+                    .or_else(|| env_non_empty("TAPO_P115_PASSWORD"))
+                    .or_else(|| env_non_empty("TAPO_LIGHTING_PASSWORD")),
             ),
             Vendor::Kasa => (
                 env_non_empty("KASA_USERNAME"),
@@ -80,7 +85,7 @@ impl Credentials {
         };
         if vendor == Vendor::Tapo && (resolved.username.is_none() || resolved.password.is_none()) {
             return Err(DeviceError::Auth(
-                "Tapo account required: pass username/password or set TAPO_EMAIL + TAPO_PASSWORD"
+                "Tapo account required: pass username/password or set TAPO_EMAIL + TAPO_PASSWORD (per-device TAPO_P115_* / TAPO_LIGHTING_* work too)"
                     .to_string(),
             ));
         }

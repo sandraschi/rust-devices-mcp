@@ -62,6 +62,7 @@ impl HueBridge {
             })?;
         let user = clean(username)
             .or_else(|| env_non_empty("HUE_USERNAME"))
+            .or_else(|| env_non_empty("HUE_BRIDGE_USERNAME"))
             .ok_or_else(|| {
                 DeviceError::Auth(
                     "Hue username required: run hue-pair (press link button) or set HUE_USERNAME"

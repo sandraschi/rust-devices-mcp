@@ -236,8 +236,13 @@ pub async fn snapshot_full(
                 })?,
             );
             let (account_user, account_pass) = (
-                env_non_empty("TAPO_EMAIL").or_else(|| env_non_empty("TAPO_USERNAME")),
-                env_non_empty("TAPO_PASSWORD"),
+                env_non_empty("TAPO_EMAIL")
+                    .or_else(|| env_non_empty("TAPO_USERNAME"))
+                    .or_else(|| env_non_empty("TAPO_P115_EMAIL"))
+                    .or_else(|| env_non_empty("TAPO_LIGHTING_EMAIL")),
+                env_non_empty("TAPO_PASSWORD")
+                    .or_else(|| env_non_empty("TAPO_P115_PASSWORD"))
+                    .or_else(|| env_non_empty("TAPO_LIGHTING_PASSWORD")),
             );
             let (account_user, account_pass) = match (account_user, account_pass) {
                 (Some(u), Some(p)) => (u, p),
